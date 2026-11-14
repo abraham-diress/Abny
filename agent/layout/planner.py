@@ -13,6 +13,10 @@ How it works
    between sets, until the requested seats are reached.
 5. Validate, remove any seating the validator says is unreachable, repeat.
 
+Offices (template "office", strategy "open-plan"): reception desk on a side wall by the door,
+meeting table in the back room (or the far end), kitchenette and storage on back walls, desk
+pods on the grid and single desks along side walls; seat_count counts desks.
+
 Every strategy is tried (unless one is requested) and the valid layout with the most
 seats (closest to the request) wins. Nothing here calls an LLM: results are deterministic.
 """
@@ -46,6 +50,7 @@ from shared.schemas import Brief, CatalogItem, Inspection, Layout, LayoutItem, R
 
 STRATEGIES = ("back-counter", "side-counter")
 GRID_STEP_M = 0.2
+ANCHOR_M2_PER_SEAT = 6.0  # floor a seat/desk needs (with aisles) before an anchor may share the open area
 EXCLUDED_ROOM_WORDS = ("bath", "restroom", "toilet", "wc", "closet", "stair", "elevator")
 
 
@@ -69,11 +74,13 @@ def plan_layout(
     site = analyze_site(rooms)
     wanted = target_seats(brief, tpl)
 
-    tried = [strategy] if strategy else list(STRATEGIES)
+    tried = [strategy] if strategy in tpl.strategies else list(tpl.strategies)
+    if strategy and strategy not in tpl.strategies:
+        tpl_notes = tpl_notes + [f"Strategy '{strategy}' doesn't apply to a {tpl.business_type}; tried {', '.join(tpl.strategies)}."]
     candidates: list[Layout] = []
     for strat in tried:
         layout = _plan_one(space_id, site, rooms, catalog, tpl, wanted, strat)
-        notes = tpl_notes + site.notes + _inspection_notes(inspection, site) + layout.notes
+        notes = tpl_notes + site.notes + _inspection_notes(inspection, site, tpl) + layout.notes
         layout.notes = [n for n in notes if n.startswith("WARNING")] + [n for n in notes if not n.startswith("WARNING")]
         candidates.append(layout)
 
@@ -81,12 +88,12 @@ def plan_layout(
         report = validate_layout(lay, site.floor_rooms)
         missing_boh = sum(1 for n in lay.notes if n.startswith("Could not fit"))
         close_enough = lay.seat_count >= 0.85 * wanted  # a couple of seats is worth a better flow
-        preference = -STRATEGIES.index(lay.strategy) if lay.strategy in STRATEGIES else 0
+        preference = -tpl.strategies.index(lay.strategy) if lay.strategy in tpl.strategies else 0
         return (report.passed, -missing_boh, close_enough, preference, lay.seat_count)
 
     best = max(candidates, key=score)
     if len(candidates) > 1:
-        others = ", ".join(f"{c.strategy}: {c.seat_count} seats" for c in candidates if c is not best)
+        others = ", ".join(f"{c.strategy}: {c.seat_count} {tpl.seat_word}" for c in candidates if c is not best)
         best.notes.append(f"Also tried {others}.")
     return best
 
@@ -212,6 +219,15 @@ def rooms_overlap(rooms: list[Room], threshold: float = 0.2) -> tuple[str, str] 
     return None
 
 
+def _named_room(site: Site, words: tuple[str, ...]) -> Room | None:
+    """A room on this floor (not the front room) whose type/label contains one of `words`."""
+    for r in site.floor_rooms:
+        text = f"{r.room_type or ''} {r.label or ''}".lower()
+        if r.room_id != site.front.room_id and any(w in text for w in words):
+            return r
+    return None
+
+
 def _excluded(room: Room) -> bool:
     text = f"{room.room_type or ''} {room.label or ''}".lower()
     return any(w in text for w in EXCLUDED_ROOM_WORDS)
@@ -226,10 +242,17 @@ def _is_exterior(a, b, room: Room, rooms: list[Room]) -> bool:
     return not any(r.room_id != room.room_id and room_polygon(r).distance(mid) < 0.3 for r in rooms)
 
 
-def _inspection_notes(inspection: Inspection | None, site: Site) -> list[str]:
+def _inspection_notes(inspection: Inspection | None, site: Site, tpl: BusinessTemplate | None = None) -> list[str]:
     if inspection is None:
         return []
     notes = []
+    if tpl is not None and tpl.business_type == "office":
+        build_out = (inspection.existing_build_out or "").lower()
+        if "private" in build_out:
+            notes.append("The space has private offices today; this open-plan layout assumes some walls come out.")
+        if inspection.natural_light is not None and inspection.natural_light < 0.3:
+            notes.append("Little daylight in the scan: plan for good lighting at the desks.")
+        return notes
     if inspection.existing_kitchen and site.back is not None:
         notes.append("Kitchen equipment goes in the existing back kitchen (reuses plumbing).")
     if inspection.storefront_glass is False:
@@ -357,6 +380,26 @@ def _plan_one(space_id: str, site: Site, rooms: list[Room], catalog, tpl: Busine
             notes.append("Could not fit the service counter.")
         boh_region = site.back_poly if site.back is not None else fpoly
 
+    # Entry items (reception) on a side wall by the door; anchors (meeting table) before the seats.
+    for t in tpl.entry_items:
+        if t in catalog and not _place_unit_on_wall(placer, site, catalog, [t], fpoly, prefer="side_near_entrance"):
+            notes.append(f"Could not fit the {catalog[t].label.lower()}.")
+    for t in tpl.anchor_items:
+        if t not in catalog:
+            continue
+        named = _named_room(site, ("conference", "meeting", "board"))
+        regions = ([room_polygon(named)] if named is not None else []) + ([site.back_poly] if site.back is not None else [])
+        open_area = seat_region if not seat_region.is_empty else fpoly
+        # In the open area only if the requested seats/desks still fit (~6 m2 each with aisles).
+        if open_area.area >= ANCHOR_M2_PER_SEAT * wanted + 2 * catalog[t].width_m * catalog[t].depth_m:
+            regions.append(open_area)
+        if not any(_place_free(placer, site, catalog, t, r) for r in regions):
+            notes.append(f"No room for the {catalog[t].label.lower()} without losing {tpl.seat_word}.")
+
+    def blocked() -> set[str]:
+        lay = _layout(placer, space_id, layout_id, tpl, site, strategy, notes)
+        return {b.item_id for b in unreachable_items(lay, site.floor_rooms, MIN_AISLE_M)}
+
     # Required back of house first, then seats, then optional extras (they only use leftover space).
     def place_boh(t: str) -> bool:
         ok = _place_on_walls(placer, site, catalog, t, boh_region, prefer="far_from_entrance")
@@ -372,26 +415,46 @@ def _plan_one(space_id: str, site: Site, rooms: list[Room], catalog, tpl: Busine
 
     for t in tpl.boh_optional:
         if t in catalog:
-            place_boh(t)
+            before = blocked()
+            if place_boh(t) and blocked() - before:  # optional: keep only if reachable and blocks nobody
+                placer.remove(placer.items()[-1].item_id)
     foh_region = seat_region if not seat_region.is_empty else fpoly
+
+    # Optional extras never cost access: keep each one only if it cuts nobody off.
     for t in tpl.foh_extras:
-        if t in catalog and not _place_on_walls(placer, site, catalog, t, foh_region, prefer="near_entrance", avoid_windows=True):
+        if t not in catalog:
+            continue
+        before = blocked()
+        if not _place_on_walls(placer, site, catalog, t, foh_region, prefer="near_entrance", avoid_windows=True):
+            break
+        if blocked() - before:
+            placer.remove(placer.items()[-1].item_id)
             break
 
     layout = _layout(placer, space_id, layout_id, tpl, site, strategy, notes)
 
-    # Repair: drop seating the validator can't reach, then fill again once.
-    for _ in range(4):
-        bad = [b for b in unreachable_items(layout, site.floor_rooms, MIN_AISLE_M) if b.seats > 0 or b.zone == "front_of_house"]
-        if not bad:
-            break
+    # Repair: drop seating the validator can't reach; if equipment is boxed in, drop the seat nearest it.
+    for _ in range(12):
+        bad = unreachable_items(layout, site.floor_rooms, MIN_AISLE_M)
+        drop = {b.item_id for b in bad if b.seats > 0 or b.zone == "front_of_house"}
         for b in bad:
-            placer.remove(b.item_id)
+            if b.zone == "back_of_house" and b.item_id not in drop:
+                here = Point(b.x_m, b.z_m)
+                # Optional front-of-house pieces (meeting table, sofa) go before any seat or desk.
+                extras = [i for i in layout.items if i.zone == "front_of_house" and i.seats == 0 and i.item_id not in drop]
+                seats_left = [i for i in layout.items if i.seats > 0 and i.item_id not in drop]
+                pool = extras or seats_left
+                if pool:
+                    drop.add(min(pool, key=lambda i: here.distance(Point(i.x_m, i.z_m))).item_id)
+        if not drop:
+            break
+        for item_id in drop:
+            placer.remove(item_id)
         layout = _layout(placer, space_id, layout_id, tpl, site, strategy, notes)
 
     seats = layout.seat_count
     if wanted and seats < wanted:
-        layout.notes.append(f"Fits {seats} of the {wanted} seats requested.")
+        layout.notes.append(f"Fits {seats} of the {wanted} {tpl.seat_word} requested.")
     return layout
 
 
@@ -495,6 +558,8 @@ def _wall_slots(site: Site, region, span: float, prefer: str):
                     key = -d_ent
                 elif prefer == "near_entrance":
                     key = d_ent
+                elif prefer == "side_near_entrance":  # side walls first, then closest to the door
+                    key = parallel_to_entrance * 100 + d_ent
                 else:  # side walls first, then closer to the back
                     key = parallel_to_entrance * 100 - d_ent
                 cands.append((key, x, z, t, n))
@@ -589,6 +654,38 @@ def _place_seating(placer: Placer, site: Site, catalog, tpl: BusinessTemplate, r
         while t in catalog and seats < wanted and _place_wall_seating(placer, site, catalog, t, region, region_prep, gap):
             seats += catalog[t].seats
     return seats
+
+
+def _place_free(placer: Placer, site: Site, catalog, item_type: str, region) -> bool:
+    """One free-standing item (e.g. a meeting table): farthest from the entrance first,
+    with a walkable aisle all around it and away from the walls."""
+    if region is None or region.is_empty:
+        return False
+    c = catalog[item_type]
+    gap = MIN_AISLE_M + 0.02
+    inner = region.buffer(-gap * 0.6)  # keep a walkway between the item and the walls
+    if inner.is_empty:
+        return False
+    region_prep = prep(inner.buffer(1e-3))
+    frame, entrance = site.frame, Point(site.entrance)
+    minx, minz, maxx, maxz = inner.bounds
+    cands = []
+    x = minx
+    while x <= maxx:
+        z = minz
+        while z <= maxz:
+            cands.append((-entrance.distance(Point(x, z)), x, z))
+            z += GRID_STEP_M
+        x += GRID_STEP_M
+    cands.sort()
+    rots = [facing_rotation(*frame.n), facing_rotation(*frame.t)]
+    for _, x, z in cands:
+        for rot in rots:
+            fp = footprint(x, z, c.width_m, c.depth_m, rot)
+            if placer.fits(fp, None, region_prep, gap=gap):
+                placer.add(item_type, _room_at(site.floor_rooms, x, z), x, z, rot)
+                return True
+    return False
 
 
 def _place_wall_seating(placer: Placer, site: Site, catalog, item_type, region, region_prep, gap) -> bool:

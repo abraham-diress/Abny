@@ -138,3 +138,55 @@ def test_touching_rooms_are_not_flagged(front_and_kitchen):
     from agent.layout.planner import rooms_overlap
 
     assert rooms_overlap(front_and_kitchen) is None
+
+
+# --- offices -------------------------------------------------------------------
+
+
+@pytest.fixture
+def office_rooms():
+    from shared.schemas import Opening, Room
+
+    return [
+        Room(room_id="open", space_id="O", label="Open office", polygon_m=[(0, 0), (14, 0), (14, 10), (0, 10)], area_m2=140,
+             openings=[Opening(kind="door", a=(0.5, 0), b=(1.5, 0)), Opening(kind="window", a=(14, 0.5), b=(14, 9.5))]),
+        Room(room_id="conf", space_id="O", label="Conference room", polygon_m=[(0, 10), (8, 10), (8, 15), (0, 15)], area_m2=40,
+             openings=[Opening(kind="door", a=(1, 10), b=(2, 10))]),
+        Room(room_id="kit", space_id="O", label="Kitchenette", polygon_m=[(8, 10), (14, 10), (14, 15), (8, 15)], area_m2=30,
+             openings=[Opening(kind="opening", a=(10, 10), b=(11, 10))]),
+    ]
+
+
+def test_office_layout(office_rooms):
+    brief = Brief(business_type="office", seats_wanted=25)
+    lay = plan_layout("O", office_rooms, None, brief)
+    rep = validate_layout(lay, office_rooms)
+    assert rep.passed, [v.message for v in rep.violations]
+    assert lay.business_type == "office" and lay.strategy == "open-plan"
+    assert lay.seat_count >= 25  # desks
+    by_type = {}
+    for it in lay.items:
+        by_type.setdefault(it.item_type, []).append(it)
+    assert not {"deck_oven", "display_case", "table_2"} & set(by_type)  # no bakery items in an office
+    assert by_type["meeting_table"][0].room_id == "conf"
+    assert by_type["kitchenette_counter"][0].room_id == "kit"
+    rec = by_type["reception_desk"][0]
+    assert ((rec.x_m - 1.0) ** 2 + rec.z_m ** 2) ** 0.5 < 4.0  # by the front door
+    assert all(i.seats == 0 for t in ("meeting_table", "sofa", "reception_desk") for i in by_type.get(t, []))
+
+
+def test_small_office_keeps_desks_over_meeting_table():
+    from shared.schemas import Opening, Room
+
+    rooms = [Room(room_id="R", space_id="S", polygon_m=[(0, 0), (9, 0), (9, 7), (0, 7)], area_m2=63,
+                  openings=[Opening(kind="door", a=(4, 0), b=(5, 0))])]
+    lay = plan_layout("S", rooms, None, Brief(business_type="office", seats_wanted=10))
+    assert validate_layout(lay, rooms).passed
+    assert lay.seat_count >= 8
+    assert any("desks" in n for n in lay.notes) or "meeting_table" in {i.item_type for i in lay.items}
+
+
+def test_unknown_strategy_tries_the_templates_own(single_room, bakery_brief):
+    lay = plan_layout("S1", single_room, None, bakery_brief, strategy="compact")
+    assert lay.strategy in STRATEGIES and any("doesn't apply" in n for n in lay.notes)
+    assert validate_layout(lay, single_room).passed

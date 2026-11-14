@@ -384,7 +384,8 @@ The frontend does no AI: it places your GLBs exactly where your `Layout` says. *
 - `from agent.staging.generate import render_hero`: needs `get_panoramas` from `pipeline.queries` and `GOOGLE_API_KEY`. Never raises on image-API trouble: it returns the plan image instead and says why in `HeroImage.model`. `HERO_MODE=preview` skips AI entirely (UI work); tests always run in preview mode (`tests/conftest.py`) so they never use the Gemini quota.
 - `from agent.staging.guide import render_floorplan`: top-down plan PNG of any layout (`media/guides/<layout_id>_plan.png`), a good fallback view.
 - `from agent.layout.catalog import catalog_list`: what `GET /api/catalog` returns. Models are in `assets/glb/`: meters, origin at the floor center, front faces +z. Rebuild with `python assets/build_assets.py`.
-- Evals: `python eval/layout_eval.py` (200 synthetic floor plans: 100% valid, 91.5% fit every requested seat, median 0.17 s), `python eval/image_eval.py`, gate G3: `python eval/g3_image_test.py --images ...`.
+- **Offices** (`business_type="office"`, strategy `open-plan`): reception desk by the door, meeting table in the room labeled conference/meeting (else the back room, else the open area if the desks still fit), kitchenette + storage on back walls, desk pods on the open floor and single desks on side walls. `seat_count` counts desks (pods add 4, so it can land 1-3 over). Office item names match Natnael's cost table (`desk_pod`, `single_desk`, `meeting_table`, `reception_desk`, `sofa`, `phone_booth`, `storage_cabinet`, `kitchenette_counter`).
+- Evals: `python eval/layout_eval.py` (200 synthetic floor plans: 100% valid, 91.5% fit every requested seat, median 0.19 s); `python eval/layout_eval.py --business office` (100% valid; the synthetic plans are shop-sized, so use real office spaces for desk-fit numbers), `python eval/image_eval.py`, gate G3: `python eval/g3_image_test.py --images ...`.
 - Tests: `pytest tests/reimagine -q`.
 
 ---

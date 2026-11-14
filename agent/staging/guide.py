@@ -135,7 +135,8 @@ def render_floorplan(layout: Layout, rooms: list[Room], px_per_m: int = 60) -> s
         cv2.circle(img, P(*layout.entrance_xz), 10, (60, 60, 220), -1)
     # Plans are drawn with +z down the image; flip so the entrance usually sits at the bottom.
     img = cv2.flip(img, 0)
-    label = f"{layout.business_type} | {layout.seat_count} seats | {layout.strategy or ''}"
+    unit = "desks" if layout.business_type == "office" else "seats"
+    label = f"{layout.business_type} | {layout.seat_count} {unit} | {layout.strategy or ''}"
     cv2.putText(img, label, (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (40, 40, 40), 2, cv2.LINE_AA)
     out = GUIDES_DIR / f"{_safe(layout.layout_id)}_plan.png"
     cv2.imwrite(str(out), img)
