@@ -230,10 +230,10 @@ These decide the details of the build. **Post results in the team chat by 1:00 P
 |---|---|---|---|
 | **G1 Coverage** | Natnael | Join CoStar listings for lease with the Matterport join CSVs. How many **retail/restaurant** and how many **office** listings have scans? (count them separately) | Fewer than ~30: switch to **broker mode**, searching vacant scanned commercial spaces (occupancy + scans) instead of listings. Same code, different filter |
 | **G2 3D objects** | Biniyam | Load one GLB into one Matterport tour via the Showcase SDK; check scale and floor height | Fall back to a 2D floor-plan overlay plus the hero image |
-| **G3 Image quality** | Yared | 5 spaces × 2 image models (Nova Canvas first) on a flat panorama face with a guide | Fewer than 3/5 convincing: drop the photoreal hero, keep 3D + style board |
+| **G3 Image quality** | Yared | 5 real room photos × Gemini image models (`gemini-3.1-flash-image`, optionally `gemini-3-pro-image`) with a plan overlay: `python eval/g3_image_test.py --images ...` | Fewer than 3/5 convincing: drop the photoreal hero, keep 3D + style board |
 | **G4 Room data** | Natnael | Which room fields exist: polygons, sizes, ceiling height, doors/windows, commercial room types (incl. office rooms like "conference room")? | Missing fields get defaults and go in `unverified_fields` |
 
-Also: run `/costar-keys` (Natnael shares keys privately, never in git) and ask `/ask-costar` whether caching the data and training on it is allowed. Abraham confirms Bedrock access (Claude + Nova Canvas) with the Amazon reps.
+Also: run `/costar-keys` (Natnael shares keys privately, never in git) and ask `/ask-costar` whether caching the data and training on it is allowed. We have no AWS keys, so all AI (agent, inspector, hero images, image judge) runs on **Gemini** with `GOOGLE_API_KEY` in `.env`.
 
 ## 8. Milestones and timeline
 
@@ -358,8 +358,8 @@ Vexcel's own `/v2/embedding/extract` already searches aerial imagery, so we neve
 | Layout | Python + shapely + rule templates per business type (an LLM only picks a strategy when rules conflict) | `Layout` |
 | Furniture catalog | CC0 GLB models (Poly Haven, Kenney, Sketchfab CC0) scaled to meters | `assets/catalog.json` + `assets/glb/` |
 | Guide | numpy/OpenCV: project each item's 3D box onto a flat panorama face using the scan pose | guide PNG |
-| Hero | **Amazon Nova Canvas on Bedrock** with the guide as structure control (verify in G3); alternative: Stability image models on Bedrock | `HeroImage` |
-| Scorer | Depth Anything V2 (building unchanged), Grounding DINO / OWLv2 (plan followed), Claude vision rubric (realism) | `ImageScore` |
+| Hero | **Gemini image model** (`gemini-3.1-flash-image`, ~10 s/image): edits the real photo using a placement map of the boxes, then the real photo is pasted back outside the furniture areas so walls can't move. Nova Canvas on Bedrock still works with `IMAGE_PROVIDER=bedrock_nova` | `HeroImage` |
+| Scorer | Edge/correlation checks outside the boxes (building unchanged), change inside the boxes (plan followed), Gemini vision judge `gemini-3.5-flash` (realism) | `ImageScore` |
 
 The frontend does no AI: it places your GLBs exactly where your `Layout` says. **Your `Layout` is the contract between you and Biniyam.**
 
@@ -371,13 +371,21 @@ The frontend does no AI: it places your GLBs exactly where your `Layout` says. *
 | R4 | Planner | `agent/layout/planner.py: plan_layout(...)`: find the entrance (door openings, else storefront wall, else ask the LLM), assign zones, place wall items greedily, then a seating grid; maximize seats up to `brief.seats_wanted` | Valid layouts on 5 real spaces | M1 | Core |
 | R5 | Validator | `agent/layout/validator.py: validate_layout(...)`: inside rooms, no overlaps, every seat reachable from the entrance with aisles ≥ `MIN_AISLE_M` (grid BFS), entrance clear (`DOOR_CLEARANCE_M`) from `shared/conventions.py`, seat count | Catches deliberately broken layouts | M1 | Core |
 | R6 | Guide | `agent/staging/guide.py: render_guide(layout, pano) -> str`: project boxes onto the panorama face (camera pose + FOV), color-coded per item class. Also a top-down plan PNG (UI fallback) | Guide lines up with the room | M2 | Core |
-| R7 | Hero | `agent/staging/generate.py: render_hero(...)`: pick the face that shows the most items, call Nova Canvas with guide + prompt (business type + `brief.style`), 2 variants, keep the best by `score_image`, retry once if both fail | 1 good hero per demo space | M2 | Core |
+| R7 | Hero | `agent/staging/generate.py: render_hero(...)`: pick the face that shows the most items, call the image model with photo + placement map + prompt (business type + `brief.style`), 2 variants, keep the best by `score_image`, retry once if both fail; fall back to the plan image if generation fails | 1 good hero per demo space | M2 | Core |
 | R8 | Scorer | `agent/staging/score.py: score_image(...)` with thresholds → `passed` | Bad images rejected automatically | M2 | Core |
 | R9 | Evals | `eval/layout_eval.py` (% valid layouts, avg seats vs requested), `eval/image_eval.py` (score stats; hand-rate 10 to sanity-check the scorer) | Numbers for the pitch | M3 | Core |
 | R10 | Office | Office catalog items (desk pod, single desk, meeting table, reception desk, sofa, phone booth, storage, kitchenette counter) + GLBs; office template (reception by the door, desk pods in the open area, meeting table, kitchenette/storage on the back wall; `seat_count` = desks; open plan only); office hero prompt; office briefs in `eval/layout_eval.py` | Office brief for 25 desks gives a valid layout | M2 | Core |
 | R11 | More business types | Café and retail templates | Brief with "café" works | M3 | Stretch |
 
 **Definition of done:** every layout the demo shows passes the validator, and every hero image shown passed the scorer.
+
+**Using the Reimaginer** (for Abraham and Biniyam):
+- `from agent.layout.planner import plan_layout` / `from agent.layout.validator import validate_layout`: deterministic, ~0.2 s, no API keys. The planner tries a back counter and a side counter and keeps the better one; `Layout.notes` says what it couldn't fit.
+- `from agent.staging.generate import render_hero`: needs `get_panoramas` from `pipeline.queries` and `GOOGLE_API_KEY`. Never raises on image-API trouble: it returns the plan image instead and says why in `HeroImage.model`. `HERO_MODE=preview` skips AI entirely (UI work); tests always run in preview mode (`tests/conftest.py`) so they never use the Gemini quota.
+- `from agent.staging.guide import render_floorplan`: top-down plan PNG of any layout (`media/guides/<layout_id>_plan.png`), a good fallback view.
+- `from agent.layout.catalog import catalog_list`: what `GET /api/catalog` returns. Models are in `assets/glb/`: meters, origin at the floor center, front faces +z. Rebuild with `python assets/build_assets.py`.
+- Evals: `python eval/layout_eval.py` (200 synthetic floor plans: 100% valid, 91.5% fit every requested seat, median 0.17 s), `python eval/image_eval.py`, gate G3: `python eval/g3_image_test.py --images ...`.
+- Tests: `pytest tests/reimagine -q`.
 
 ---
 
