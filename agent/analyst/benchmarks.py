@@ -42,8 +42,17 @@ ITEM_COST: dict[str, tuple[float, float]] = {
     "refrigerator": (3_000, 8_000),
     "espresso_machine": (6_000, 20_000),
     "menu_board": (200, 1_500),
-    "table_2": (250, 700),
-    "table_for_2": (250, 700),
+    # Yared's catalog (assets/catalog.json). Tables are "with chairs": table + chairs priced together.
+    "espresso_bar": (8_000, 25_000),     # bar counter + commercial espresso machine + grinder
+    "proofing_cabinet": (2_500, 8_000),
+    "spiral_mixer": (4_000, 15_000),
+    "three_comp_sink": (1_000, 3_500),   # NSF three-compartment sink, installed
+    "reach_in_fridge": (3_000, 8_000),
+    "table_4": (620, 1_900),             # table (300–900) + 4 chairs (80–250 each)
+    "condiment_station": (500, 2_000),
+    "retail_shelf": (200, 1_000),
+    "table_2": (410, 1_200),             # table (250–700) + 2 chairs (80–250 each)
+    "table_for_2": (410, 1_200),
     "bench_table_4": (600, 1_800),
     "bench_table_for_4": (600, 1_800),
     "table": (250, 900),
