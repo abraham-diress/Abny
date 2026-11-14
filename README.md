@@ -4,6 +4,8 @@
 
 A small-business owner says what they need ("second bakery location in Houston, ~20 seats, under $6k/month, needs parking"). Hestia's AI agent searches real vacant commercial spaces (CoStar listings and Matterport 3D scans, plus Vexcel aerial imagery), inspects the best ones, **places their business inside the real 3D tour**, renders a photorealistic "this is your bakery" image, and works out rent, fit-out cost and break-even. Every number links to its source.
 
+The same engine also fits out **offices** ("office for a 25-person team in downtown LA, near transit, under $20k/month"): desks, meeting tables and a reception desk in the real 3D tour, with cost per desk instead of break-even. See [Business types](#business-types-bakery-first-office-second).
+
 > **Find your name below** ([Abraham](#abraham) · [Natnael](#natnael) · [Biniyam](#biniyam) · [Yared](#yared)). Everything you need to build is listed under your name. Read [Contracts](#5-contracts-how-our-code-fits-together) before writing code.
 
 ---
@@ -35,11 +37,11 @@ A small-business owner says what they need ("second bakery location in Houston, 
 - **Never commit sponsor data or keys.** CoStar, Matterport and Vexcel data is licensed for this hackathon only. `data/` and `.env` are gitignored; keep it that way. The repo must be public.
 - **Don't wait on each other.** Until a teammate's function exists, build against a small hand-made object of its return type (see [Contracts](#5-contracts-how-our-code-fits-together)).
 - **Don't change a shared schema silently.** Post in the team chat first, and tell Biniyam so the frontend types match.
-- **Bakery first.** Other business types are stretch goals.
+- **Bakery first, office second.** Bakery is the main demo; office is the second business type everyone supports (see [Business types](#business-types-bakery-first-office-second)). Other types are stretch goals.
 
 ## 2. The pitch and what judges score
 
-**Problem:** finding a commercial space takes weeks of tours, and owners can't picture an empty room as their business. Hiring an architect to check fit costs money before you even know if the space works. Meanwhile empty storefronts hurt neighborhoods.
+**Problem:** finding a commercial space takes weeks of tours, and owners can't picture an empty room as their business. Hiring an architect to check fit costs money before you even know if the space works. Meanwhile empty storefronts hurt neighborhoods, and downtown office vacancy is near record highs.
 
 **Tracks we're entering** (one project, several prizes):
 
@@ -57,6 +59,23 @@ A small-business owner says what they need ("second bakery location in Houston, 
 2. A real Deep Agent that plans, uses subagents and files, and **re-plans on feedback**.
 3. The UI is not a chat window: a live agent plan, a map, and a 3D tour the agent furnishes. CoStar's VP asked for exactly this in the workshop.
 4. Numbers with sources and measured quality (layout validity %, image scores).
+5. One engine, more than one business: the demo fits out a bakery, then an office, with the same agent and the same code.
+
+### Business types: bakery first, office second
+
+`Brief.business_type` decides what each part of the system does. **Everyone supports `bakery` and `office`.** `cafe` and `retail` reuse the bakery path (stretch).
+
+| Part (owner) | Bakery (main demo) | Office (second demo) |
+|---|---|---|
+| Example brief | "Second bakery in Houston, ~20 seats, under $6k/month, needs parking" | "Office for a 25-person team in downtown LA, near transit, under $20k/month" |
+| `parse_brief` (Abraham) | `seats_wanted` = customer seats | `business_type="office"`, `seats_wanted` = desks (headcount) |
+| `query_spaces` (Natnael) | retail/restaurant spaces | office spaces |
+| `neighborhood_profile` (Natnael) | competitors (other bakeries/cafés), foot traffic, parking | `amenities` (food, cafés, gyms nearby), transit weighted higher, no competitors |
+| `inspect_space` (Abraham) | storefront glass, existing kitchen, vent hood, restroom | `natural_light`, `existing_build_out` (open plan / private offices / shell), restrooms, ceiling |
+| `plan_layout` (Yared) | display case + counter by the door, ovens/prep at the back, café tables | reception by the door, desk pods in the open area, meeting table, kitchenette/storage on the back wall. Open plan only (no new walls) |
+| `render_hero` (Yared) | "artisan bakery…" prompt | "modern open-plan office…" prompt |
+| `estimate_costs` (Natnael) | fit-out, revenue, break-even months | fit-out, **cost per desk per month** (`cost_per_seat_month_*`), rent vs nearby office listings; revenue 0, break-even None |
+| Results card (Biniyam) | revenue + break-even | cost per desk; hide revenue/break-even |
 
 ## 3. Architecture
 
@@ -209,10 +228,10 @@ These decide the details of the build. **Post results in the team chat by 1:00 P
 
 | Gate | Owner | Test | If it fails |
 |---|---|---|---|
-| **G1 Coverage** | Natnael | Join CoStar retail/restaurant listings for lease with the Matterport join CSVs. How many have scans? | Fewer than ~30: switch to **broker mode**, searching vacant scanned commercial spaces (occupancy + scans) instead of listings. Same code, different filter |
+| **G1 Coverage** | Natnael | Join CoStar listings for lease with the Matterport join CSVs. How many **retail/restaurant** and how many **office** listings have scans? (count them separately) | Fewer than ~30: switch to **broker mode**, searching vacant scanned commercial spaces (occupancy + scans) instead of listings. Same code, different filter |
 | **G2 3D objects** | Biniyam | Load one GLB into one Matterport tour via the Showcase SDK; check scale and floor height | Fall back to a 2D floor-plan overlay plus the hero image |
 | **G3 Image quality** | Yared | 5 spaces × 2 image models (Nova Canvas first) on a flat panorama face with a guide | Fewer than 3/5 convincing: drop the photoreal hero, keep 3D + style board |
-| **G4 Room data** | Natnael | Which room fields exist: polygons, sizes, ceiling height, doors/windows, commercial room types? | Missing fields get defaults and go in `unverified_fields` |
+| **G4 Room data** | Natnael | Which room fields exist: polygons, sizes, ceiling height, doors/windows, commercial room types (incl. office rooms like "conference room")? | Missing fields get defaults and go in `unverified_fields` |
 
 Also: run `/costar-keys` (Natnael shares keys privately, never in git) and ask `/ask-costar` whether caching the data and training on it is allowed. Abraham confirms Bedrock access (Claude + Nova Canvas) with the Amazon reps.
 
@@ -223,7 +242,7 @@ Also: run `/costar-keys` (Natnael shares keys privately, never in git) and ask `
 | **M0 Skeletons run** | **Sat 2:00 PM** | Each person's code runs on hand-made sample objects: agent CLI runs, UI renders sample results, layout/data modules return valid schema objects |
 | **M1 One real space** | **Sat 7:00 PM** | One real space flows through everything: real data → layout → 3D placement → hero → numbers, in the UI |
 | **M2 Full funnel** | **Sat 11:00 PM** | Search over all candidates, top 5 fitted, feedback loop works |
-| **M3 Freeze** | **Sun 2:00 AM** | 5 demo spaces cached, `DEMO=1` works offline. Bug fixes only after this |
+| **M3 Freeze** | **Sun 2:00 AM** | 5 demo spaces cached (3 bakery-ready + 2 office), `DEMO=1` works offline for both briefs. Bug fixes only after this |
 
 - **Sun 2:00–6:00 AM:** polish, record the video, Devpost, rehearse the pitch 10+ times. Sleep in shifts.
 - **Sun 6:30 AM:** submit. 8:00 AM hard deadline.
@@ -246,13 +265,13 @@ Each task has a **Due** milestone and a **Priority**: **Core** (needed for the d
 | # | Task | Details | Done when | Due | Priority |
 |---|---|---|---|---|---|
 | B1 | Agent skeleton | `agent/agent.py: build_agent()` with `create_deep_agent`: orchestrator system prompt + 5 subagents (scout, inspector, designer, stager, analyst), each with its tools (wrap the contract functions). Use the `AGENT_*` file names from `shared/conventions.py` | `python -m agent.cli "bakery in Houston, 20 seats, under $6k"` writes `/brief.md` + `/candidates/*` and prints a ranked list (on sample objects) | M0 | Core |
-| B2 | Brief parser | `agent/brief.py: parse_brief(text) -> Brief` via structured output | 5 sample prompts parse correctly | M0 | Core |
+| B2 | Brief parser | `agent/brief.py: parse_brief(text) -> Brief` via structured output. Offices: `business_type="office"`, headcount → `seats_wanted` | 5 sample prompts parse correctly, including 2 office ones ("team of 25…") | M0 | Core |
 | B3 | Server | `server/app.py`: the routes in §5.3. Run the agent as a background task; turn its stream (todo updates, file writes, tool calls, subagent start/finish) into numbered `AgentEvent`s sent as SSE (§5.4); store results per run. Ship a stub version early that returns sample results so Biniyam can connect | Biniyam's UI talks to your server | M0 | Core |
 | B4 | Tool wiring | Clear tool docstrings (the LLM reads them). Tool errors return a message instead of crashing; add timeouts | The agent recovers from one failing tool | M1 | Core |
-| B5 | Inspector | `agent/tools/inspector.py: inspect_space(space_id) -> Inspection`: 3–5 panoramas (`get_panoramas`) → Claude vision with a checklist (storefront glass, existing kitchen/vent hood, restroom, ceiling estimate). Anything it can't see goes in `unverified_fields` | Hand-checked on 5 real spaces | M1 | Core |
-| B6 | Funnel + ranking | Orchestrator policy: filter → rank → inspect top `FUNNEL_INSPECT_TOP` → fit out top `FUNNEL_FIT_TOP` (in parallel). Emit `funnel_update`. Rank with `rank_score` + human-readable `rank_reasons` | Full run in ~2 min on cached data | M2 | Core |
+| B5 | Inspector | `agent/tools/inspector.py: inspect_space(space_id) -> Inspection`: 3–5 panoramas (`get_panoramas`) → Claude vision with a checklist (storefront glass, existing kitchen/vent hood, restroom, ceiling estimate, `natural_light`, `existing_build_out`). Use the office checklist when `business_type="office"` (daylight, build-out, restrooms matter; kitchen doesn't). Anything it can't see goes in `unverified_fields` | Hand-checked on 5 real spaces (incl. 2 offices) | M1 | Core |
+| B6 | Funnel + ranking | Orchestrator policy: filter → rank → inspect top `FUNNEL_INSPECT_TOP` → fit out top `FUNNEL_FIT_TOP` (in parallel). Emit `funnel_update`. Rank with `rank_score` + human-readable `rank_reasons` (offices: transit, amenities, daylight, cost per desk; bakery: foot traffic, competitors, parking, existing kitchen) | Full run in ~2 min on cached data, for both a bakery and an office brief | M2 | Core |
 | B7 | Feedback loop | `POST feedback` → append to `Brief.feedback_history` → re-run only the affected stages → stream new events (`round` + 1) | "Fewer seats, closer to transit" re-ranks in under 60 s | M2 | Core |
-| B8 | Demo mode | `DEMO=1`: record a full run's events + results to `data/runs/` and replay them | Demo works with Wi-Fi off | M3 | Core |
+| B8 | Demo mode | `DEMO=1`: record a full run's events + results to `data/runs/` and replay them. Record **two** runs: the bakery brief and the office brief | Demo works with Wi-Fi off | M3 | Core |
 | B9 | Provider fallback | `LLM_PROVIDER=anthropic` path in case Bedrock misbehaves | Switching is one env var | M3 | Stretch |
 
 **Definition of done:** the agent decides *when* to call tools (real planning, visible in the plan panel), every result has reasons, nothing crashes on one bad space.
@@ -273,7 +292,7 @@ Each task has a **Due** milestone and a **Priority**: **Core** (needed for the d
 | Step | What | Priority |
 |---|---|---|
 | 1 | CoStar JSON + 2 join CSVs → DuckDB (`DB_PATH` in `shared/conventions.py`), `spaces` view | Core, ~1 h |
-| 2 | Pick the candidate set (500–1,500 spaces) after G1 | Core |
+| 2 | Pick the candidate set (500–1,500 spaces) after G1: retail/restaurant **and** office spaces with scans | Core |
 | 3 | Matterport rooms + scan poses per candidate | Core, background |
 | 4 | Vexcel property data + 1 ortho + 1 oblique crop per candidate | Core, background |
 | 5 | ~5 panorama faces per candidate (furniture-free where available) | Core for the top spaces |
@@ -283,14 +302,14 @@ Vexcel's own `/v2/embedding/extract` already searches aerial imagery, so we neve
 
 | # | Task | Details | Done when | Due | Priority |
 |---|---|---|---|---|---|
-| D1 | Keys + gates | `/costar-keys` → `.env` (share privately); one test call per API; run **G1** and **G4** | Results posted in chat | 1:00 PM | Core |
+| D1 | Keys + gates | `/costar-keys` → `.env` (share privately); one test call per API; run **G1** (retail/restaurant and office counts separately) and **G4** | Results posted in chat | 1:00 PM | Core |
 | D2 | CoStar ingest | `pipeline/ingest_costar.py`: the 8 datasets (commercial property, commercial listing, location occupancy, company detail, sale comps, apartment listings, residential listings, listing features) + the 2 Matterport join CSVs → DuckDB tables; a `spaces` view with one row per candidate | `SELECT count(*) FROM spaces WHERE has_scan` works | M0 | Core |
 | D3 | Matterport fetch | `pipeline/fetch_matterport.py`: rooms (polygon, type, area, floor height, openings if available), scan poses + intrinsics, panorama faces → DuckDB + `data/media/panos/<model>/<scan>_<face>.jpg`. Resumable (skip cached), rate-limited, logs failures | Demo spaces fully cached | M1 | Core |
 | D4 | Vexcel fetch | `pipeline/fetch_vexcel.py`: `/v2/property/extract` (footprint, parcel, attributes), ortho + oblique crops → DuckDB + `data/media/aerial/` | Same | M1 | Core |
-| D5 | Query functions | `pipeline/queries.py`: the 5 data contract functions. `neighborhood_profile`: tenants within ~400 m (occupancy/company detail), nearby apartment units, competitors by tenant-name match ("bakery", "café"…), parking via Vexcel data/embedding search, a 0–1 `score`. **Every value carries a `Citation`** | Abraham's agent runs on real data | M1 | Core |
-| D6 | Numbers | `agent/analyst/costs.py`: `estimate_costs` (rent from listing; fit-out $/sqft range, lower if `existing_kitchen`; revenue = seats × turns × ticket × days; break-even months; every assumption in `assumptions`) and `draft_broker_email` | Numbers card filled with real data and sources | M2 | Core |
-| D7 | Demo cache | 5 demo spaces fully cached and hand-checked (picked with Yared + Biniyam for good visuals) | `DEMO=1` has everything it needs | M3 | Core |
-| D8 | Story | Devpost write-up, 2-min pitch script with one sourced stat on small-business site selection or vacancy, edit the video from Biniyam's recording, polish this README's pitch | Submitted by 6:30 AM | Sun AM | Core |
+| D5 | Query functions | `pipeline/queries.py`: the 5 data contract functions. `query_spaces` filters property type by `brief.business_type` (office → office spaces). `neighborhood_profile`: tenants within ~400 m (occupancy/company detail), nearby apartment units, competitors by tenant-name match ("bakery", "café"…), parking via Vexcel data/embedding search, a 0–1 `score`. Offices: leave `competitors` empty, fill `amenities` (restaurants, cafés, gyms nearby) and weight transit higher. **Every value carries a `Citation`** | Abraham's agent runs on real data | M1 | Core |
+| D6 | Numbers | `agent/analyst/costs.py`: `estimate_costs` (rent from listing; fit-out $/sqft range, lower if `existing_kitchen`; revenue = seats × turns × ticket × days; break-even months; every assumption in `assumptions`) and `draft_broker_email`. **Offices:** fit-out $/sqft for office build-out (lower if `existing_build_out` is already open plan), `cost_per_seat_month_*` = (rent + fit-out spread over the lease) / desks, rent compared with nearby office listings (cite them); revenue 0, break-even None | Numbers card filled with real data and sources, for a bakery and an office | M2 | Core |
+| D7 | Demo cache | 5 demo spaces fully cached and hand-checked: 3 for the bakery brief + 2 for the office brief (picked with Yared + Biniyam for good visuals) | `DEMO=1` has everything it needs | M3 | Core |
+| D8 | Story | Devpost write-up, 2-min pitch script with one sourced stat on small-business site selection or vacancy (plus one on office vacancy for the office moment), edit the video from Biniyam's recording, polish this README's pitch | Submitted by 6:30 AM | Sun AM | Core |
 | D9 | CLIP index | `pipeline/visual_search.py` over panorama embeddings (LanceDB) | Free-text "bright open front room" works | M2 | Stretch |
 
 **Definition of done:** the agent never waits on a live API during the demo, and every number can be traced to a record.
@@ -310,11 +329,11 @@ Vexcel's own `/v2/embedding/extract` already searches aerial imagery, so we neve
 |---|---|---|---|---|---|
 | E1 | Gate G2 | Blank page embedding the Matterport Showcase SDK; load one GLB at a coordinate; check floor alignment and scale | Report posted: works / need fallback | 1:00 PM | Core |
 | E2 | App scaffold | Next.js in `web/`; TS types for the schemas you use in `web/src/types/`; `web/src/lib/api.ts` with `createRun`, `streamEvents` (EventSource), `getResults`, `sendFeedback`, `getCatalog`; base URL from `NEXT_PUBLIC_API_BASE` (default `http://localhost:8000`) | Renders hand-made sample results; switches to Abraham's server when it's up | M0 | Core |
-| E3 | Brief screen | Big text box + quick chips (business type, city, seats, max rent) → `POST /api/runs` | Starts a run and opens the run view | M0 | Core |
+| E3 | Brief screen | Big text box + quick chips (business type incl. **Office**, city, seats/desks, max rent) → `POST /api/runs`. Two example briefs one click away: bakery and office | Starts a run and opens the run view | M0 | Core |
 | E4 | Agent plan panel | Live from SSE: todo checklist (`plan_update`), which subagent is working, recent tool calls, the funnel counter (`funnel_update`), "file written" notes | Updates live during a run | M1 | Core |
-| E5 | 3D tour | `<SpaceTour spaceId layout />`: load the space's Matterport model; place one GLB per `LayoutItem` at `(x_m, floor_y, z_m)` rotated by `rotation_deg`; toggle furniture on/off; jump to a room | A real space with furniture placed correctly | M1 | Core |
-| E6 | Map | MapLibre: candidate pins colored by rank; aerial crop for the selected space; competitor and transit pins from `NeighborhoodProfile` | Click a pin → that space opens | M1 | Core |
-| E7 | Results | Ranked cards + detail view: `rank_reasons`, before/after slider (empty panorama vs hero), numbers with **source tooltips** from citations, "Email broker" showing the draft, validation badge | Every number shows its source | M2 | Core |
+| E5 | 3D tour | `<SpaceTour spaceId layout />`: load the space's Matterport model; place one GLB per `LayoutItem` at `(x_m, floor_y, z_m)` rotated by `rotation_deg`; toggle furniture on/off; jump to a room. Works for any `item_type` in the catalog (office items too); never hard-code bakery items | A real space with furniture placed correctly (bakery and office) | M1 | Core |
+| E6 | Map | MapLibre: candidate pins colored by rank; aerial crop for the selected space; competitor, amenity and transit pins from `NeighborhoodProfile` | Click a pin → that space opens | M1 | Core |
+| E7 | Results | Ranked cards + detail view: `rank_reasons`, before/after slider (empty panorama vs hero), numbers with **source tooltips** from citations, "Email broker" showing the draft, validation badge. Numbers card by business type: bakery shows revenue + break-even; office shows **cost per desk / month** and hides revenue/break-even. Label seats as "desks" for offices | Every number shows its source | M2 | Core |
 | E8 | Feedback UI | Reject a result + free text ("fewer seats, closer to transit") → `POST feedback`; reconnect to events; show the re-ranking | Demo step 4 works | M2 | Core |
 | E9 | Polish + recording | Loading/empty/error states; check at projector resolution; screen-record the demo for the video | Recording handed to Natnael | M3 | Core |
 | E10 | Animations | Smooth re-rank animation, camera fly-through between rooms | Looks great | M3 | Stretch |
@@ -327,7 +346,7 @@ Vexcel's own `/v2/embedding/extract` already searches aerial imagery, so we neve
 
 ### 🎨 Yared: The Reimaginer (Layout + Visuals)
 
-**Mission:** the "wow." Decide where the counter, ovens and tables go in the real rooms, and make the photorealistic "this is your bakery" image, with measured quality.
+**Mission:** the "wow." Decide where the counter, ovens and tables (or desks and meeting tables) go in the real rooms, and make the photorealistic "this is your bakery / office" image, with measured quality.
 **You own:** `agent/layout/`, `agent/staging/`, `assets/` (catalog + GLBs), `eval/`.
 **You expose:** `plan_layout`, `validate_layout`, `render_guide`, `render_hero`, `score_image`, and `assets/catalog.json`.
 **You consume:** `Room`, `PanoRef`, `Inspection`, `Brief` (hand-made samples first, then Natnael's/Abraham's real functions).
@@ -355,7 +374,8 @@ The frontend does no AI: it places your GLBs exactly where your `Layout` says. *
 | R7 | Hero | `agent/staging/generate.py: render_hero(...)`: pick the face that shows the most items, call Nova Canvas with guide + prompt (business type + `brief.style`), 2 variants, keep the best by `score_image`, retry once if both fail | 1 good hero per demo space | M2 | Core |
 | R8 | Scorer | `agent/staging/score.py: score_image(...)` with thresholds → `passed` | Bad images rejected automatically | M2 | Core |
 | R9 | Evals | `eval/layout_eval.py` (% valid layouts, avg seats vs requested), `eval/image_eval.py` (score stats; hand-rate 10 to sanity-check the scorer) | Numbers for the pitch | M3 | Core |
-| R10 | More business types | Café and retail templates | Brief with "café" works | M3 | Stretch |
+| R10 | Office | Office catalog items (desk pod, single desk, meeting table, reception desk, sofa, phone booth, storage, kitchenette counter) + GLBs; office template (reception by the door, desk pods in the open area, meeting table, kitchenette/storage on the back wall; `seat_count` = desks; open plan only); office hero prompt; office briefs in `eval/layout_eval.py` | Office brief for 25 desks gives a valid layout | M2 | Core |
+| R11 | More business types | Café and retail templates | Brief with "café" works | M3 | Stretch |
 
 **Definition of done:** every layout the demo shows passes the validator, and every hero image shown passed the scorer.
 
@@ -379,9 +399,10 @@ The frontend does no AI: it places your GLBs exactly where your `Layout` says. *
 ## 11. Demo script (2 minutes)
 1. **(15 s)** The problem: "Finding a space takes weeks of tours, and you still can't picture it." One sourced stat.
 2. **(20 s)** Type Maria's brief → the plan panel fills in, subagents fan out, the funnel counter drops: "600 → 150 → 20 → 5."
-3. **(40 s)** Open #1: map with parking and competitors → walk the **real 3D tour with her bakery inside** → photoreal hero → rent, fit-out and break-even with sources.
-4. **(25 s)** "Fewer seats, closer to transit" → the agent re-plans and re-ranks live.
-5. **(20 s)** Quality numbers (layouts 100% valid, X% of images kept the building intact), roadmap (broker mode, scan your own space), close.
+3. **(35 s)** Open #1: map with parking and competitors → walk the **real 3D tour with her bakery inside** → photoreal hero → rent, fit-out and break-even with sources.
+4. **(20 s)** "Fewer seats, closer to transit" → the agent re-plans and re-ranks live.
+5. **(12 s)** "Same engine, different business": click the office brief (replayed) → a vacant office with 25 desks in the 3D tour, cost per desk.
+6. **(18 s)** Quality numbers (layouts 100% valid, X% of images kept the building intact), roadmap (broker mode, scan your own space), close.
 
 ## 12. Submission checklist
 - [ ] Repo public; created during the event; no data, no keys (`git log -p | grep -i key` check)

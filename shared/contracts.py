@@ -36,6 +36,7 @@ def parse_brief(text: str) -> Brief:
 
     Module: agent/brief.py
     Returns: Brief with raw_text set; fields the user didn't mention stay None/empty.
+             Offices: business_type="office", headcount ("team of 25") goes in seats_wanted.
     TODO(Abraham): implement with LLM structured output.
     """
     raise NotImplementedError
@@ -46,7 +47,9 @@ def inspect_space(space_id: str) -> Inspection:
 
     Module: agent/tools/inspector.py
     Uses: get_panoramas(space_id)
-    Returns: Inspection (storefront glass, existing kitchen/restroom/vent hood, ceiling height).
+    Returns: Inspection (storefront glass, existing kitchen/restroom/vent hood, ceiling height,
+             natural_light, existing_build_out). For offices, daylight, restrooms and the existing
+             build-out matter most; kitchen and vent hood don't.
              Anything the model can't confirm goes in unverified_fields; list pano_ids used.
     TODO(Abraham): implement with Claude vision + a checklist prompt.
     """
@@ -64,6 +67,7 @@ def query_spaces(brief: Brief, limit: int = 200) -> list[Space]:
     Module: pipeline/queries.py
     Returns: up to `limit` Spaces, each with citations to its CoStar records.
              Keep slightly-over-budget spaces so the agent can reason about trade-offs.
+             Property type follows brief.business_type: office -> office spaces; others -> retail/restaurant.
     TODO(Natnael)
     """
     raise NotImplementedError
@@ -99,6 +103,7 @@ def neighborhood_profile(space_id: str) -> NeighborhoodProfile:
     Module: pipeline/queries.py
     Sources: CoStar occupancy/company detail/apartment listings, Vexcel property + embedding search.
     Returns: every value backed by a Citation.
+             Offices: no competitors; fill amenities (food, cafés, gyms) and weight transit higher.
     TODO(Natnael)
     """
     raise NotImplementedError
@@ -110,6 +115,8 @@ def estimate_costs(space: Space, layout: Layout | None, inspection: Inspection |
     Module: agent/analyst/costs.py
     Returns: Numbers with every assumption listed in `assumptions` and data in `citations`.
              Fit-out cost should be lower when inspection.existing_kitchen is True.
+             Offices: no revenue or break-even (leave 0 / None); fill cost_per_seat_month instead
+             (cost per desk), and compare rent with nearby office listings.
     TODO(Natnael)
     """
     raise NotImplementedError
@@ -145,7 +152,7 @@ def plan_layout(
 
     Module: agent/layout/planner.py
     Returns: Layout whose items use catalog item_types and model coordinates (x, z meters);
-             seat_count = sum of item seats. Must pass validate_layout.
+             seat_count = sum of item seats (desks for offices). Must pass validate_layout.
     TODO(Yared)
     """
     raise NotImplementedError
