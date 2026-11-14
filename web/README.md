@@ -72,7 +72,8 @@ mock-server/             Hono mock API: fixtures.ts (sample data), glb.ts (place
 | E3 brief screen (Office chip, bakery + office example briefs) | done |
 | Office business type: types synced with `shared/schemas.py` (amenities, natural_light, existing_build_out, cost_per_seat_month_*); numbers card shows cost per desk and hides revenue/break-even; "desks" labels | done against the mock |
 | E4 agent plan panel (todos, subagents, funnel, activity) | done |
-| E7 results: cards, hero, numbers with source tooltips, broker email, validation | mostly (before/after slider needs panoramas, see below) |
+| E7 results: cards, hero, numbers with source tooltips, broker email, validation | done. The hero is a before/after slider over the real empty pano (`media/panos/<model>/<scan>_<face>.jpg`, derived from `source_pano_id`; plain image if the file isn't served), with a "Stand where this was taken" button that moves the tour to that viewpoint |
+| Interactive walk-through (`SpaceTour` + `FloorPlan`) | done: the plan drives the tour (click furniture to look at it from ~2.5 m, click the floor or a room to go there, click a dot to stand on that viewpoint); the plan shows you, your view cone and the photo's viewpoint live from `Camera.pose` |
 | E8 feedback UI (re-plan + reject) | done against the mock |
 | E1 gate G2 test page (`/g2`) | passed: 2.4 × 0.8 × 1.0 m box measures exactly that in the scene, sits on the floor (±3 cm), 90° rotation swaps x/z, scan geometry occludes it |
 | E5 `<SpaceTour>` (`src/components/SpaceTour.tsx`): real tour in the space detail, one GLB per `LayoutItem` at (x, room floor y, z) + `rotation_deg`, furniture on/off, dollhouse / floor plan, jump to rooms with furniture; falls back to the 2D plan without key/bundle/scan | done against the mock: 12/12 bakery items measured at their layout positions, on the floor, inside their real rooms |

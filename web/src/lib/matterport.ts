@@ -87,8 +87,27 @@ interface ObservableMap<T> {
   subscribe(observer: { onCollectionUpdated(collection: Record<string, T>): void }): Subscription;
 }
 
+/** Camera pose; rotation is degrees, y = yaw. Matterport follows three.js: forward = (−sin yaw, −cos yaw). */
+export interface CameraPose {
+  position: Vec3;
+  rotation: { x: number; y: number };
+  sweep: string;
+  mode: string;
+}
+
+/** Where the camera looks on the floor plan, from its yaw (checked against a live tour). */
+export const yawToDir = (yawDeg: number): [number, number] => {
+  const r = (yawDeg * Math.PI) / 180;
+  return [-Math.sin(r), -Math.cos(r)];
+};
+
+/** Yaw that looks from (fx, fz) toward (tx, tz). Inverse of yawToDir. */
+export const yawToward = (fx: number, fz: number, tx: number, tz: number) => (Math.atan2(-(tx - fx), -(tz - fz)) * 180) / Math.PI;
+
 export interface MpSdk {
   App: { state: Observable<{ phase: string }> };
+  Camera: { pose: Observable<CameraPose> };
+  Model: { getData(): Promise<{ sid: string; sweeps: SweepInfo[] }> };
   Scene: { createObjects(count: number): Promise<MpSceneObject[]> };
   Pointer: { intersection: Observable<Intersection> };
   Sweep: {
@@ -143,6 +162,39 @@ export function nearestSweep(sweeps: SweepInfo[], x: number, z: number, inside?:
     const d = Math.hypot(s.position.x - x, s.position.z - z);
     if (d < bestD) {
       bestD = d;
+      best = s;
+    }
+  }
+  return best;
+}
+
+/**
+ * A good place to stand to look at a floor point: on the same floor, ideally in the same room,
+ * about 2.5 m away (close enough to see it, not standing on top of it).
+ */
+export function viewpointFor(
+  sweeps: SweepInfo[],
+  x: number,
+  z: number,
+  opts: { inside?: (x: number, z: number) => boolean; floor?: number } = {},
+): SweepInfo | null {
+  let pool = sweeps.filter((s) => s.alignmentType !== "unaligned");
+  if (opts.floor != null) {
+    const same = pool.filter((s) => (s.floorInfo?.sequence ?? opts.floor) === opts.floor);
+    if (same.length) pool = same;
+  }
+  if (opts.inside) {
+    const inRoom = pool.filter((s) => opts.inside!(s.position.x, s.position.z));
+    if (inRoom.length) pool = inRoom;
+  }
+  let best: SweepInfo | null = null;
+  let bestScore = Infinity;
+  for (const s of pool) {
+    const d = Math.hypot(s.position.x - x, s.position.z - z);
+    // Prefer ~2.5 m; much closer means looking straight down at it.
+    const score = d < 0.9 ? 3 + (0.9 - d) : Math.abs(d - 2.5);
+    if (score < bestScore) {
+      bestScore = score;
       best = s;
     }
   }

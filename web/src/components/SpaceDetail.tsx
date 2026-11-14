@@ -7,9 +7,9 @@ import { assetUrl } from "@/lib/config";
 import { isOffice, seatWord } from "@/lib/business";
 import { pct } from "@/lib/format";
 import type { CandidateResult, Inspection, Room } from "@/types/schemas";
-import { FloorPlan } from "@/components/FloorPlan";
+import { BeforeAfter, parsePanoId } from "@/components/BeforeAfter";
 import { NumbersCard } from "@/components/NumbersCard";
-import { SpaceTour } from "@/components/SpaceTour";
+import { SpaceTour, type TourApi } from "@/components/SpaceTour";
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -97,6 +97,17 @@ function BrokerEmail({ text }: { text: string }) {
 export function SpaceDetail({ result }: { result: CandidateResult }) {
   const { space, layout, validation, hero } = result;
   const [rooms, setRooms] = useState<Room[] | undefined>();
+  const [tour, setTour] = useState<TourApi | null>(null);
+  // The photo's viewpoint: scan ids are the tour's sweep ids.
+  const photoSweep = hero && !isPreviewHero(hero.model) ? (parsePanoId(hero.source_pano_id)?.scan ?? null) : null;
+  const showInTour = tour && photoSweep && layout
+    ? () => {
+        tour.reveal();
+        const cx = layout.items.reduce((s, it) => s + it.x_m, 0) / Math.max(1, layout.items.length);
+        const cz = layout.items.reduce((s, it) => s + it.z_m, 0) / Math.max(1, layout.items.length);
+        void tour.standAt(photoSweep, [cx, cz]);
+      }
+    : undefined;
 
   useEffect(() => {
     let cancelled = false;
@@ -123,7 +134,7 @@ export function SpaceDetail({ result }: { result: CandidateResult }) {
       </header>
 
       <Section title="Walk through it">
-        <SpaceTour space={space} layout={layout} rooms={rooms} />
+        <SpaceTour space={space} layout={layout} rooms={rooms} photoSweep={photoSweep} onReady={setTour} />
       </Section>
 
       {hero && isPreviewHero(hero.model) ? (
@@ -139,14 +150,11 @@ export function SpaceDetail({ result }: { result: CandidateResult }) {
         </Section>
       ) : hero && (
         <Section title="Your business in this space">
-          {/* eslint-disable-next-line @next/next/no-img-element -- images come from the API server, not optimized by Next */}
-          <img src={assetUrl(hero.path)} alt={`Rendering of the ${result.layout?.business_type ?? "business"} inside ${space.address}`} className="aspect-video w-full rounded-xl border border-border object-cover" />
-          {hero.score && (
-            <p className="flex items-center gap-1.5 text-xs text-muted">
-              {hero.score.passed ? <ShieldCheck className="size-4 text-good" /> : <ShieldAlert className="size-4 text-bad" />}
-              Image check {hero.score.passed ? "passed" : "failed"}: building kept {pct(hero.score.structure_preserved)}, plan followed {pct(hero.score.plan_adherence)}, realism {hero.score.realism_1to5.toFixed(1)}/5
-            </p>
-          )}
+          <BeforeAfter
+            hero={hero}
+            alt={`Rendering of the ${result.layout?.business_type ?? "business"} inside ${space.address}`}
+            onShowInTour={showInTour}
+          />
         </Section>
       )}
 
@@ -169,8 +177,7 @@ export function SpaceDetail({ result }: { result: CandidateResult }) {
       </Section>
 
       {layout && (
-        <Section title="Layout">
-          <FloorPlan layout={layout} rooms={rooms} />
+        <Section title="Layout check">
           {validation && (
             <p className="flex items-center gap-1.5 text-sm">
               {validation.passed ? <ShieldCheck className="size-4 text-good" /> : <ShieldAlert className="size-4 text-bad" />}

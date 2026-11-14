@@ -1,33 +1,49 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Box, Eye, EyeOff, Loader2, Map as MapIcon, MapPin } from "lucide-react";
+import { Box, Camera, Eye, EyeOff, Loader2, Map as MapIcon, MapPin, MousePointerClick, PersonStanding } from "lucide-react";
 import clsx from "clsx";
 import { MATTERPORT_SDK_KEY, assetUrl } from "@/lib/config";
 import {
   MODE_DOLLHOUSE,
   MODE_FLOORPLAN,
+  MODE_INSIDE,
   TRANSITION_FLY,
   addLights,
   bundleInstalled,
   collection,
   connectBundle,
   measure,
-  nearestSweep,
   placeGlb,
   setVisible,
   showcaseUrl,
+  viewpointFor,
+  yawToward,
+  type CameraPose,
   type MpSdk,
   type PlacedModel,
   type SweepInfo,
 } from "@/lib/matterport";
-import type { Layout, Room, Space, XZ } from "@/types/schemas";
-import { FloorPlan } from "@/components/FloorPlan";
+import type { Layout, LayoutItem, Room, Space, XZ } from "@/types/schemas";
+import { FloorPlan, ZoneLegend, itemName, roomAt } from "@/components/FloorPlan";
 import { LayoutViewer3D } from "@/components/LayoutViewer3D";
 
 type Phase = "checking" | "fallback" | "loading" | "ready" | "error";
 
 const TOUR_TIMEOUT_MS = 20_000;
+const FLY_MS = 1400;
+/** Look a little down at furniture, not at the ceiling line. */
+const LOOK_PITCH = -12;
+
+/** What the rest of the page can ask the tour to do. */
+export interface TourApi {
+  /** Stand somewhere you can see this floor point, facing it. */
+  lookAt(x: number, z: number): Promise<void>;
+  /** Stand on a viewpoint (scan id = sweep id), optionally facing a floor point. */
+  standAt(sid: string, face?: XZ): Promise<void>;
+  /** Scroll the tour into view. */
+  reveal(): void;
+}
 
 /** No real tour: the layout in 3D (Yared's models), with the 2D plan one click away. */
 function TourFallback({ layout, rooms, reason }: { layout: Layout | null; rooms?: Room[]; reason: string | null }) {
@@ -55,39 +71,53 @@ function TourFallback({ layout, rooms, reason }: { layout: Layout | null; rooms?
         </div>
       </div>
       {view === "3d" ? <LayoutViewer3D layout={layout} rooms={rooms} /> : <FloorPlan layout={layout} rooms={rooms} />}
+      <ZoneLegend layout={layout} />
     </div>
   );
 }
 
-function insidePolygon(x: number, z: number, poly: XZ[]): boolean {
-  let hit = false;
-  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-    const [xi, zi] = poly[i];
-    const [xj, zj] = poly[j];
-    if (zi > z !== zj > z && x < ((xj - xi) * (z - zi)) / (zj - zi) + xi) hit = !hit;
-  }
-  return hit;
-}
-
 const centroid = (poly: XZ[]): XZ => [poly.reduce((s, p) => s + p[0], 0) / poly.length, poly.reduce((s, p) => s + p[1], 0) / poly.length];
 
+function itemsCenter(items: LayoutItem[]): XZ | null {
+  if (!items.length) return null;
+  return [items.reduce((s, it) => s + it.x_m, 0) / items.length, items.reduce((s, it) => s + it.z_m, 0) / items.length];
+}
+
 /**
- * E5: the space's real Matterport tour with the layout's furniture placed in it.
+ * E5: the space's real Matterport tour with the layout's furniture placed in it, next to a live floor plan.
  * One GLB per LayoutItem at (x_m, room floor y, z_m), rotated rotation_deg about +y.
- * Works for any catalog item_type (bakery, office, ...). Falls back to the 2D floor plan
- * (gate G2 fallback) when there is no SDK key, no bundle, or no scan.
+ * The plan drives the tour: click a piece of furniture to look at it, the floor or a room to go there,
+ * a dot to stand on that viewpoint; the plan shows where you are and which way you're looking.
+ * Falls back to the layout in three.js (gate G2 fallback) when there is no SDK key, no bundle, or no scan.
  */
-export function SpaceTour({ space, layout, rooms }: { space: Space; layout: Layout | null; rooms?: Room[] }) {
+export function SpaceTour({
+  space,
+  layout,
+  rooms,
+  photoSweep,
+  onReady,
+}: {
+  space: Space;
+  layout: Layout | null;
+  rooms?: Room[];
+  /** Viewpoint the photoreal image was made from (HeroImage.source_pano_id's scan id). */
+  photoSweep?: string | null;
+  onReady?: (api: TourApi | null) => void;
+}) {
   const modelId = space.matterport_model_id;
+  const rootRef = useRef<HTMLDivElement>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const sdkRef = useRef<MpSdk | null>(null);
   const placedRef = useRef<PlacedModel[]>([]);
-  const sweepsRef = useRef<SweepInfo[]>([]);
+  const [sweeps, setSweeps] = useState<SweepInfo[]>([]);
   const [phase, setPhase] = useState<Phase>("checking");
   const [reason, setReason] = useState<string | null>(null);
   const [visible, setVisibleState] = useState(true);
   const [loaded, setLoaded] = useState(0);
   const [placedLayoutId, setPlacedLayoutId] = useState<string | null>(null);
+  const [pose, setPose] = useState<CameraPose | null>(null);
+  const [selected, setSelected] = useState<LayoutItem | null>(null);
+  const [moving, setMoving] = useState(false);
 
   // Rooms that hold furniture (most items first); the rest of the house isn't worth a button.
   const jumpRooms = useMemo(() => {
@@ -97,6 +127,26 @@ export function SpaceTour({ space, layout, rooms }: { space: Space; layout: Layo
     const used = rooms.filter((r) => count.has(r.room_id)).sort((a, b) => (count.get(b.room_id) ?? 0) - (count.get(a.room_id) ?? 0));
     return used.length ? used : rooms;
   }, [rooms, layout]);
+
+  // The floor the furniture is on (multi-storey scans): the floor of the viewpoint nearest the furniture.
+  const floor = useMemo(() => {
+    const c = itemsCenter(layout?.items ?? []);
+    if (!c || !sweeps.length) return undefined;
+    return viewpointFor(sweeps, c[0], c[1])?.floorInfo?.sequence;
+  }, [sweeps, layout]);
+
+  const floorSweeps = useMemo(
+    () =>
+      sweeps
+        .filter((s) => s.alignmentType !== "unaligned" && (floor == null || (s.floorInfo?.sequence ?? floor) === floor))
+        .map((s) => ({ sid: s.sid, x: s.position.x, z: s.position.z })),
+    [sweeps, floor],
+  );
+
+  const photoSpot = useMemo(() => {
+    const s = photoSweep ? sweeps.find((w) => w.sid === photoSweep) : undefined;
+    return s ? { x: s.position.x, z: s.position.z } : null;
+  }, [sweeps, photoSweep]);
 
   useEffect(() => {
     let cancelled = false;
@@ -127,17 +177,74 @@ export function SpaceTour({ space, layout, rooms }: { space: Space; layout: Layo
     [rooms],
   );
 
-  const jumpTo = useCallback(async (x: number, z: number, poly?: XZ[]) => {
+  const standAt = useCallback(async (sid: string, face?: XZ) => {
     const sdk = sdkRef.current;
     if (!sdk) return;
-    const s = nearestSweep(sweepsRef.current, x, z, poly ? (px, pz) => insidePolygon(px, pz, poly) : undefined);
-    if (s) await sdk.Sweep.moveTo(s.sid, { transition: TRANSITION_FLY, transitionTime: 1500 }).catch(() => {});
-  }, []);
+    const s = sweeps.find((w) => w.sid === sid);
+    const rotation = face && s ? { x: LOOK_PITCH, y: yawToward(s.position.x, s.position.z, face[0], face[1]) } : undefined;
+    setMoving(true);
+    try {
+      // Matterport ignores a move to the sweep you're on, so switch back inside first if needed.
+      await sdk.Sweep.moveTo(sid, { transition: TRANSITION_FLY, transitionTime: FLY_MS, rotation });
+    } catch {
+      /* moving while a move is running rejects; the newest click wins next time */
+    } finally {
+      setMoving(false);
+    }
+  }, [sweeps]);
+
+  const lookAt = useCallback(
+    async (x: number, z: number) => {
+      const room = roomAt(rooms, x, z);
+      const inside = room ? (px: number, pz: number) => roomAt([room], px, pz) != null : undefined;
+      const s = viewpointFor(sweeps, x, z, { inside, floor });
+      if (s) await standAt(s.sid, [x, z]);
+    },
+    [rooms, sweeps, floor, standAt],
+  );
+
+  // Hand the page a stable handle once the tour is ready.
+  const api = useMemo<TourApi>(
+    () => ({
+      lookAt,
+      standAt,
+      reveal: () => rootRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }),
+    }),
+    [lookAt, standAt],
+  );
+  useEffect(() => {
+    if (phase !== "ready" || !sweeps.length) return;
+    onReady?.(api);
+    return () => onReady?.(null);
+  }, [phase, sweeps, api, onReady]);
+
+  // Live camera pose for the plan's "you are here", throttled to ~8 updates a second.
+  useEffect(() => {
+    const sdk = sdkRef.current;
+    if (phase !== "ready" || !sdk) return;
+    let last = 0;
+    let pending: CameraPose | null = null;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const flush = () => {
+      timer = null;
+      last = performance.now();
+      if (pending) setPose(pending);
+    };
+    const sub = sdk.Camera.pose.subscribe((p) => {
+      pending = { position: { ...p.position }, rotation: { ...p.rotation }, sweep: p.sweep, mode: p.mode };
+      if (timer) return;
+      timer = setTimeout(flush, Math.max(0, 120 - (performance.now() - last)));
+    });
+    return () => {
+      sub.cancel();
+      if (timer) clearTimeout(timer);
+    };
+  }, [phase]);
 
   // Place (or re-place, after a feedback round) the layout once the tour is ready.
   useEffect(() => {
     const sdk = sdkRef.current;
-    if (phase !== "ready" || !sdk) return;
+    if (phase !== "ready" || !sdk || !sweeps.length) return;
     if (!layout || layout.layout_id === placedLayoutId) return;
     let cancelled = false;
     (async () => {
@@ -157,34 +264,32 @@ export function SpaceTour({ space, layout, rooms }: { space: Space; layout: Layo
         placedRef.current.push(m);
       }
       setPlacedLayoutId(layout.layout_id);
-      // Start where the furniture is, so the business is the first thing you see.
-      // Aim at the furniture itself (rooms can be huge, e.g. a whole office floor, and the
-      // rooms endpoint may be missing): the viewpoint nearest the first item, which is the
-      // service counter / reception for Yared's templates.
-      const first = layout.items[0];
-      const room = rooms?.find((r) => r.room_id === first?.room_id);
-      const [cx, cz]: XZ = first ? [first.x_m, first.z_m] : room ? centroid(room.polygon_m) : layout.entrance_xz ?? [0, 0];
-      await jumpTo(cx, cz, room?.polygon_m);
+      // Start where the photo was taken (so the image and the tour match), else looking at the furniture.
+      const c = itemsCenter(layout.items) ?? layout.entrance_xz ?? [0, 0];
+      if (photoSweep && sweeps.some((s) => s.sid === photoSweep)) await standAt(photoSweep, c);
+      else await lookAt(c[0], c[1]);
     })();
     return () => {
       cancelled = true;
     };
     // `visible` is applied separately; re-placing on toggle would reload every GLB.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase, layout, placedLayoutId, clearFurniture, floorY, jumpTo, rooms]);
+  }, [phase, sweeps, layout, placedLayoutId, clearFurniture, floorY]);
 
-  // Dev-only hook for checking placement from the console / tests: measured box of every placed model.
+  // Dev-only hook for checking placement from the console / tests.
   useEffect(() => {
     if (process.env.NODE_ENV === "production") return;
     const w = window as unknown as { __hestiaTour?: unknown };
     w.__hestiaTour = {
       layoutId: () => placedLayoutId,
       placed: () => placedRef.current.map((m, i) => ({ item: layout?.items[i]?.item_id, box: measure(m) })),
+      pose: () => pose,
+      api,
     };
     return () => {
       delete w.__hestiaTour;
     };
-  }, [layout, placedLayoutId]);
+  }, [layout, placedLayoutId, pose, api]);
 
   // Progress: how many GLBs have finished loading.
   useEffect(() => {
@@ -242,7 +347,11 @@ export function SpaceTour({ space, layout, rooms }: { space: Space; layout: Layo
       ]);
       sdkRef.current = sdk;
       await addLights(sdk);
-      sweepsRef.current = await collection(sdk.Sweep.data).catch(() => []);
+      // Sweep.data only fills on the first connection to an iframe; Model.getData always works.
+      const list = await collection(sdk.Sweep.data, 5000)
+        .catch(() => [] as SweepInfo[])
+        .then(async (l) => (l.length ? l : (await sdk.Model.getData()).sweeps ?? []));
+      setSweeps(list);
       setPhase("ready");
     } catch (e) {
       setReason(e instanceof Error ? e.message : String(e));
@@ -260,49 +369,130 @@ export function SpaceTour({ space, layout, rooms }: { space: Space; layout: Layo
     return <TourFallback layout={layout} rooms={rooms} reason={reason} />;
   }
 
+  const ready = phase === "ready";
   const total = layout?.items.length ?? 0;
-  const btn = "inline-flex items-center gap-1.5 rounded-lg bg-black/60 px-2.5 py-1.5 text-xs text-white backdrop-blur hover:bg-black/75 focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50";
+  const inside = !pose || pose.mode === MODE_INSIDE;
+  const btn =
+    "inline-flex items-center gap-1.5 rounded-lg bg-black/60 px-2.5 py-1.5 text-xs text-white backdrop-blur hover:bg-black/75 focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50";
 
   return (
-    <div className="space-y-2">
-      <div className="relative aspect-video overflow-hidden rounded-xl border border-border bg-surface-2">
-        {phase !== "checking" && modelId && (
-          <iframe
-            key={modelId}
-            ref={iframeRef}
-            src={showcaseUrl(modelId, MATTERPORT_SDK_KEY)}
-            title={`3D tour of ${space.address}`}
-            onLoad={onLoad}
-            allow="fullscreen; xr-spatial-tracking"
-            className="absolute inset-0 size-full"
-          />
-        )}
-        {(phase === "checking" || phase === "loading") && (
-          <div className="pointer-events-none absolute top-2 left-2 inline-flex items-center gap-2 rounded-lg bg-black/60 px-2.5 py-1.5 text-xs text-white">
-            <Loader2 className="size-3.5 animate-spin" /> Loading 3D tour…
-          </div>
-        )}
-        {phase === "ready" && (
-          <div className="absolute top-2 right-2 flex flex-wrap justify-end gap-1.5">
-            <button type="button" onClick={toggleFurniture} disabled={!total} className={btn} aria-pressed={visible}>
-              {visible ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />} {visible ? "Hide" : "Show"} furniture
-            </button>
-            <button type="button" onClick={() => sdkRef.current?.Mode.moveTo(MODE_DOLLHOUSE).catch(() => {})} className={btn}>
-              <Box className="size-3.5" /> Dollhouse
-            </button>
-            <button type="button" onClick={() => sdkRef.current?.Mode.moveTo(MODE_FLOORPLAN).catch(() => {})} className={btn}>
-              <MapIcon className="size-3.5" /> Floor plan
-            </button>
-          </div>
-        )}
-        {phase === "ready" && total > 0 && loaded < total && (
-          <div className="pointer-events-none absolute bottom-2 left-2 inline-flex items-center gap-2 rounded-lg bg-black/60 px-2.5 py-1.5 text-xs text-white">
-            <Loader2 className="size-3.5 animate-spin" /> Placing furniture {loaded}/{total}
+    <div ref={rootRef} className="@container space-y-2">
+      <div className="grid gap-3 @3xl:grid-cols-[minmax(0,1fr)_16rem]">
+        <div className="relative aspect-video overflow-hidden rounded-xl border border-border bg-surface-2">
+          {phase !== "checking" && modelId && (
+            <iframe
+              key={modelId}
+              ref={iframeRef}
+              src={showcaseUrl(modelId, MATTERPORT_SDK_KEY)}
+              title={`3D tour of ${space.address}`}
+              onLoad={onLoad}
+              allow="fullscreen; xr-spatial-tracking"
+              className="absolute inset-0 size-full"
+            />
+          )}
+          {(phase === "checking" || phase === "loading") && (
+            <div className="pointer-events-none absolute top-2 left-2 inline-flex items-center gap-2 rounded-lg bg-black/60 px-2.5 py-1.5 text-xs text-white">
+              <Loader2 className="size-3.5 animate-spin" /> Loading 3D tour…
+            </div>
+          )}
+          {ready && (
+            <div className="absolute top-2 right-2 flex flex-wrap justify-end gap-1.5">
+              <button type="button" onClick={toggleFurniture} disabled={!total} className={btn} aria-pressed={visible}>
+                {visible ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />} {visible ? "Empty room" : "Show furniture"}
+              </button>
+              {inside ? (
+                <>
+                  <button type="button" onClick={() => sdkRef.current?.Mode.moveTo(MODE_DOLLHOUSE).catch(() => {})} className={btn}>
+                    <Box className="size-3.5" /> Dollhouse
+                  </button>
+                  <button type="button" onClick={() => sdkRef.current?.Mode.moveTo(MODE_FLOORPLAN).catch(() => {})} className={btn}>
+                    <MapIcon className="size-3.5" /> Top view
+                  </button>
+                </>
+              ) : (
+                <button type="button" onClick={() => sdkRef.current?.Mode.moveTo(MODE_INSIDE).catch(() => {})} className={btn}>
+                  <PersonStanding className="size-3.5" /> Walk inside
+                </button>
+              )}
+            </div>
+          )}
+          {ready && total > 0 && loaded < total && (
+            <div className="pointer-events-none absolute top-12 left-2 inline-flex items-center gap-2 rounded-lg bg-black/60 px-2.5 py-1.5 text-xs text-white">
+              <Loader2 className="size-3.5 animate-spin" /> Placing furniture {loaded}/{total}
+            </div>
+          )}
+          {ready && selected && (
+            <div className="pointer-events-none absolute top-12 left-2 rounded-lg bg-black/60 px-2.5 py-1.5 text-xs text-white backdrop-blur" aria-live="polite">
+              {moving ? "Going to" : "Looking at"} the <span className="font-medium">{itemName(selected)}</span>
+              {` · ${selected.width_m.toFixed(1)} × ${selected.depth_m.toFixed(1)} m`}
+              {selected.seats ? ` · ${selected.seats} seats` : ""}
+            </div>
+          )}
+        </div>
+
+        {layout && (
+          <div className="space-y-2">
+            <p className="flex items-center gap-1.5 text-xs text-muted">
+              <MousePointerClick className="size-3.5 shrink-0" />
+              {ready ? "Click furniture or the floor to go there" : "Floor plan (the tour is loading)"}
+            </p>
+            <FloorPlan
+              layout={layout}
+              rooms={rooms}
+              viewpoints={ready ? floorSweeps : undefined}
+              you={ready && inside && pose ? { x: pose.position.x, z: pose.position.z, yaw: pose.rotation.y } : null}
+              photoSpot={ready ? photoSpot : null}
+              selectedId={selected?.item_id}
+              onItem={
+                ready
+                  ? (it) => {
+                      setSelected(it);
+                      void lookAt(it.x_m, it.z_m);
+                    }
+                  : undefined
+              }
+              onPick={
+                ready
+                  ? (x, z) => {
+                      setSelected(null);
+                      void lookAt(x, z);
+                    }
+                  : undefined
+              }
+              onViewpoint={ready ? (sid) => (setSelected(null), void standAt(sid)) : undefined}
+              onPhotoSpot={
+                ready && photoSweep
+                  ? () => {
+                      setSelected(null);
+                      void standAt(photoSweep, itemsCenter(layout.items) ?? undefined);
+                    }
+                  : undefined
+              }
+              className="max-h-80 w-full rounded-xl border border-border bg-surface-2 @3xl:max-h-[26rem]"
+            />
+            <ZoneLegend layout={layout} />
+            {ready && (
+              <ul className="space-y-0.5 text-xs text-muted">
+                <li className="inline-flex items-center gap-1.5">
+                  <span className="size-2.5 rounded-full bg-accent" aria-hidden /> You, and where you&apos;re looking
+                </li>
+                {photoSpot && (
+                  <li className="flex items-center gap-1.5">
+                    <Camera className="size-3.5" /> Where the photo was taken
+                  </li>
+                )}
+                {floorSweeps.length > 0 && (
+                  <li className="flex items-center gap-1.5">
+                    <span className="size-2 rounded-full bg-muted/60" aria-hidden /> Places you can stand
+                  </li>
+                )}
+              </ul>
+            )}
           </div>
         )}
       </div>
 
-      {phase === "ready" && jumpRooms.length > 0 && (
+      {ready && jumpRooms.length > 0 && (
         <div className="flex flex-wrap items-center gap-1.5 text-xs">
           <span className="text-muted">Jump to:</span>
           {jumpRooms.map((r) => (
@@ -311,9 +501,10 @@ export function SpaceTour({ space, layout, rooms }: { space: Space; layout: Layo
               type="button"
               onClick={() => {
                 const [cx, cz] = centroid(r.polygon_m);
-                void jumpTo(cx, cz, r.polygon_m);
+                setSelected(null);
+                void lookAt(cx, cz);
               }}
-              className={clsx("inline-flex items-center gap-1 rounded-full border border-border px-2.5 py-1 hover:border-muted")}
+              className="inline-flex items-center gap-1 rounded-full border border-border px-2.5 py-1 hover:border-muted"
             >
               <MapPin className="size-3" /> {r.label ?? r.room_type ?? r.room_id}
             </button>
