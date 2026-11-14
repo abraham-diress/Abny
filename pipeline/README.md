@@ -68,6 +68,7 @@ python -m pipeline.cache_status --set-demo id1,id2,id3,id4,id5
 python -m pipeline.fetch_matterport --space-ids id1,...,id5 --scans all
 python -m pipeline.fetch_vexcel --space-ids id1,...,id5
 python -m pipeline.cache_status                      # D7 check
+python -m pipeline.pack_demo --out data/hestia-demo-data.zip   # zip DB + demo media; share PRIVATELY, unzip in repo root
 python -m pipeline.fetch_matterport --no-images      # background: rooms + poses for all candidates
 python -m pipeline.fetch_matterport                  # background: 2 scans x 4 faces per candidate
 python -m pipeline.fetch_vexcel                      # background
