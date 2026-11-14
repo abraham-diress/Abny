@@ -222,31 +222,28 @@ def neighborhood_profile(space_id: str) -> NeighborhoodProfile:
     )
 
 
-def sample_inspection(space_id: str, business_type: str = "bakery") -> Inspection:
-    """What a vision inspection might say; used only when there are no cached panorama files."""
-    rooms = get_rooms(space_id)
-    if is_office(get_space(space_id)) or business_type == "office":
+def sample_inspection(space_id: str, business_type: str = "bakery", ceiling_m: float | None = None) -> Inspection:
+    """What a vision inspection might say, for synthetic 'sample-' spaces when vision can't run (no images or no LLM).
+    Deterministic per space_id; works for this module's spaces and for the Data Engine's sample database."""
+    if ceiling_m is None and space_id in SPACES:
+        ceiling_m = get_rooms(space_id)[0].ceiling_m
+    note = "Sample inspection: synthetic space, vision not run."
+    if business_type == "office":
         build = ["open plan", "private offices", "mixed offices", "shell"][int(_h(space_id + "b") * 4)]
         return Inspection(
             space_id=space_id, existing_restroom=_h(space_id + "rr") > 0.15, storefront_glass=False,
             existing_kitchen=False, natural_light=round(0.3 + _h(space_id + "nl") * 0.7, 2),
-            existing_build_out=build, ceiling_height_m=rooms[0].ceiling_m,
-            notes=["Sample inspection: no cached panoramas yet."], confidence=0.3,
-            unverified_fields=["natural_light"],
-            citations=[Citation(source="matterport", dataset="rooms", record_id=rooms[0].room_id,
-                                field="ceiling_m", value=rooms[0].ceiling_m, note=SAMPLE)])
+            existing_build_out=build, ceiling_height_m=ceiling_m, notes=[note], confidence=0.3,
+            unverified_fields=["natural_light"], citations=[Citation(source="assumption", note=SAMPLE)])
     return Inspection(
         space_id=space_id,
         storefront_glass=_h(space_id + "g") > 0.25,
         existing_kitchen=_h(space_id + "k") > 0.6,
         existing_restroom=_h(space_id + "rr") > 0.3,
         vent_hood=_h(space_id + "v") > 0.7,
-        ceiling_height_m=rooms[0].ceiling_m,
-        notes=["Sample inspection: no cached panoramas yet."],
-        confidence=0.3,
+        ceiling_height_m=ceiling_m, notes=[note], confidence=0.3,
         unverified_fields=["existing_kitchen", "vent_hood"],
-        citations=[Citation(source="matterport", dataset="rooms", record_id=rooms[0].room_id,
-                            field="ceiling_m", value=rooms[0].ceiling_m, note=SAMPLE)],
+        citations=[Citation(source="assumption", note=SAMPLE)],
     )
 
 

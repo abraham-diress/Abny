@@ -129,8 +129,10 @@ def rank_neighborhoods(ctx: RunContext, top_n: int | None = None, agent: str = "
     ctx.emit("tool_call", agent=agent, message="neighborhood_profile", tool="neighborhood_profile",
              args={"spaces": len(todo), "cached": len(ids) - len(todo)})
 
+    kw = {"business_type": ctx.brief.business_type} if P.accepts(P.neighborhood_profile, "business_type") else {}
+
     def one(sid: str):
-        return safe_call(ctx, agent, "neighborhood_profile", P.neighborhood_profile, sid, quiet=True)
+        return safe_call(ctx, agent, "neighborhood_profile", P.neighborhood_profile, sid, quiet=True, **kw)
 
     for sid, res in pmap(one, todo).items():
         if isinstance(res, ToolError):
@@ -289,11 +291,21 @@ def numbers_lines(n, business_type: str) -> list[str]:
     lines = [f"Rent: ${n.rent_month or 0:,.0f}/mo", f"Fit-out: ${n.fitout_cost_low:,.0f}-{n.fitout_cost_high:,.0f}"]
     if business_type == "office":
         if n.cost_per_seat_month_low is not None:
-            lines.append(f"Cost per desk: ${n.cost_per_seat_month_low:,.0f}-{n.cost_per_seat_month_high or 0:,.0f}/mo")
+            lines.append(f"Cost per desk: {_range(n.cost_per_seat_month_low, n.cost_per_seat_month_high, '$')}/mo")
     else:
         lines.append(f"Revenue: ${n.revenue_month_low:,.0f}-{n.revenue_month_high:,.0f}/mo")
-        lines.append(f"Break-even: {n.breakeven_months_low}-{n.breakeven_months_high} months")
+        if n.breakeven_months_low is not None:
+            lines.append(f"Break-even: {_range(n.breakeven_months_low, n.breakeven_months_high)} months")
+        else:
+            lines.append("Break-even: not within the lease at these assumptions")
     return lines
+
+
+def _range(lo: float, hi: float | None, unit: str = "") -> str:
+    """'$660-756', or '24+' when the upper bound is unknown (e.g. it never breaks even in the worst case)."""
+    if hi is None:
+        return f"{unit}{lo:,.0f}+"
+    return f"{unit}{lo:,.0f}-{hi:,.0f}"
 
 
 def _collect(ctx: RunContext, res: dict[str, Any], fatal: bool = True) -> dict[str, str]:
@@ -347,16 +359,16 @@ def publish_results(ctx: RunContext, space_ids: list[str] | None = None, notes: 
     ctx.update_funnel(fitted=sum(1 for r in results if r.status == "fitted"))
     for r in results:
         sid = r.space.space_id
-        ctx.write_file(C.AGENT_MEMO.format(space_id=sid), memo_markdown(r), agent=agent)
+        ctx.write_file(C.AGENT_MEMO.format(space_id=sid), memo_markdown(r, ctx.brief.business_type), agent=agent)
         ctx.emit("candidate_ready", agent=agent, message=f"#{r.rank} {r.space.address}", result=r)
     return results
 
 
-def memo_markdown(r: CandidateResult) -> str:
+def memo_markdown(r: CandidateResult, business_type: str = "bakery") -> str:
     s = r.space
     lines = [f"# #{r.rank} {s.address}", "", f"Score **{r.rank_score:.2f}** ({r.status})", "", "## Why"]
     lines += [f"- {x}" for x in r.rank_reasons]
-    office = r.layout.business_type == "office" if r.layout else (r.space.property_type or "").lower() == "office"
+    office = business_type == "office"
     if r.numbers:
         lines += ["", "## Numbers"] + [f"- {x}" for x in numbers_lines(r.numbers, "office" if office else "food")]
     if r.layout:

@@ -8,9 +8,7 @@ from shared.schemas import AgentEvent, CandidateResult, RunStatus
 
 
 @pytest.fixture()
-def client(monkeypatch, tmp_path):
-    monkeypatch.setattr("agent.llm.llm_available", lambda: False)
-    monkeypatch.setattr("agent.runner.llm_available", lambda: False)
+def client(sample_db, monkeypatch, tmp_path):  # sample database + no LLM (tests/conftest.py)
     monkeypatch.setattr("server.runs.RUNS_DIR", tmp_path)
     from server.app import app
 
@@ -84,6 +82,7 @@ def test_unknown_and_catalog(client):
     assert client.get("/api/runs/nope").status_code == 404
     assert client.get("/api/spaces/nope").status_code == 404
     assert client.get("/api/spaces/sample-hou-01").json()["city"] == "Houston"
+    assert client.get("/api/spaces/sample-la-office-15").json()["city"] == "Los Angeles"
     assert len(client.get("/api/catalog").json()) >= 5
 
 
@@ -105,4 +104,4 @@ def test_replay_only_offices(client, monkeypatch, tmp_path):
     assert _wait(client, oid).result_count > 0 and _wait(client, bid).result_count > 0
     assert runs.get(oid).replay is not None and runs.get(bid).replay is None
     office_results = client.get(f"/api/runs/{oid}/results").json()
-    assert all(r["run_id"] == oid and r["space"]["property_type"] == "Office" for r in office_results)
+    assert office_results and all(r["run_id"] == oid and "office" in r["space"]["property_type"].lower() for r in office_results)
