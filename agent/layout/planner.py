@@ -641,39 +641,53 @@ def _place_seating(placer: Placer, site: Site, catalog, tpl: BusinessTemplate, r
         while seats < min(wanted, bench_cap) and _place_wall_seating(placer, site, catalog, t, region, region_prep, gap):
             seats += catalog[t].seats
 
-    # 2) Free-standing sets on a grid, nearest the storefront first.
+    # 2) Free-standing sets on a grid, nearest the storefront first. A set that would overshoot the
+    #    request waits: wall seats top up first, and oversize sets only fill what the walls can't.
     frame = site.frame
     types = [t for t in tpl.seating_free if t in catalog]
-    if not types:
-        return seats
-    v0, v1 = frame.depth_extent(region if isinstance(region, Polygon) else region.convex_hull)
-    us = [frame.to_local(c)[0] for p in _polys(region) for c in p.exterior.coords]
-    u0, u1 = min(us), max(us)
-    rots = [facing_rotation(*frame.n), facing_rotation(*frame.t)]
-    v = v0 + 0.1
-    while v <= v1 and seats < wanted:
-        u = u0 + 0.1
-        while u <= u1 and seats < wanted:
-            remaining = wanted - seats
-            order = sorted(types, key=lambda t: (catalog[t].seats > remaining, -catalog[t].seats))
-            for t in order:
-                c = catalog[t]
-                placed = False
-                for rot in rots:
-                    x, z = frame.to_world(u + c.width_m / 2, v + c.depth_m / 2)
-                    fp = footprint(x, z, c.width_m, c.depth_m, rot)
-                    if placer.fits(fp, None, region_prep, gap=gap):
-                        placer.add(t, _room_at(site.floor_rooms, x, z), x, z, rot)
-                        seats += c.seats
-                        placed = True
+
+    def grid(allow_over: bool, kinds: list[str]) -> None:
+        nonlocal seats
+        v0, v1 = frame.depth_extent(region if isinstance(region, Polygon) else region.convex_hull)
+        us = [frame.to_local(c)[0] for p in _polys(region) for c in p.exterior.coords]
+        u0, u1 = min(us), max(us)
+        rots = [facing_rotation(*frame.n), facing_rotation(*frame.t)]
+        v = v0 + 0.1
+        while v <= v1 and seats < wanted:
+            u = u0 + 0.1
+            while u <= u1 and seats < wanted:
+                remaining = wanted - seats
+                order = sorted(kinds, key=lambda t: (catalog[t].seats > remaining, -catalog[t].seats))
+                for t in order:
+                    c = catalog[t]
+                    if c.seats > remaining and not allow_over:
+                        continue
+                    placed = False
+                    for rot in rots:
+                        x, z = frame.to_world(u + c.width_m / 2, v + c.depth_m / 2)
+                        fp = footprint(x, z, c.width_m, c.depth_m, rot)
+                        if placer.fits(fp, None, region_prep, gap=gap):
+                            placer.add(t, _room_at(site.floor_rooms, x, z), x, z, rot)
+                            seats += c.seats
+                            placed = True
+                            break
+                    if placed:
                         break
-                if placed:
-                    break
-            u += GRID_STEP_M
-        v += GRID_STEP_M
-    for t in tpl.seating_wall:
-        while t in catalog and seats < wanted and _place_wall_seating(placer, site, catalog, t, region, region_prep, gap):
-            seats += catalog[t].seats
+                u += GRID_STEP_M
+            v += GRID_STEP_M
+
+    def wall_top_up() -> None:
+        nonlocal seats
+        for t in tpl.seating_wall:
+            while t in catalog and seats < wanted and _place_wall_seating(placer, site, catalog, t, region, region_prep, gap):
+                seats += catalog[t].seats
+
+    if types:
+        grid(allow_over=False, kinds=types)
+    wall_top_up()
+    if types and seats < wanted:  # walls full: wall seats may stand free, then a set may round up
+        grid(allow_over=False, kinds=types + [t for t in tpl.seating_wall if t in catalog and t not in types])
+        grid(allow_over=True, kinds=types)
     return seats
 
 

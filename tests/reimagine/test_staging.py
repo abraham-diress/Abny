@@ -197,3 +197,16 @@ def test_cube_faces_turn_the_right_way(pano_file):
     # A point on the floor in front of the camera is below the image center.
     px, _ = PanoCamera(base).project(np.array([[4.5, 0.0, 6.0]]))
     assert px[0][1] > 320
+
+
+def test_hero_without_panoramas_is_the_floor_plan(single_room, bakery_brief, monkeypatch):
+    import sys
+    import types
+
+    layout = plan_layout("S1", single_room, None, bakery_brief)
+    monkeypatch.setattr(generate, "_panoramas", lambda space_id: [])
+    fake = types.ModuleType("pipeline.queries")
+    fake.get_rooms = lambda space_id: single_room
+    monkeypatch.setitem(sys.modules, "pipeline.queries", fake)
+    hero = generate.render_hero("S1", layout)
+    assert hero.model.startswith("floor-plan") and hero.path.endswith("_plan.png") and to_path(hero.path).exists()

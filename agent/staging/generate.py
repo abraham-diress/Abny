@@ -37,7 +37,10 @@ MAX_ROUNDS = 2
 
 def render_hero(space_id: str, layout: Layout, style: str | None = None) -> HeroImage:
     ensure_dirs()
-    pano = pick_panorama(_panoramas(space_id), layout)
+    panos = _panoramas(space_id)
+    if not panos:  # nothing cached for this space: the top-down plan is still a picture of the layout
+        return _floorplan_hero(space_id, layout, build_prompt(layout, style))
+    pano = pick_panorama(panos, layout)
     guide_url = render_guide(layout, pano)
     prompt = build_prompt(layout, style)
     mode = os.environ.get("HERO_MODE", "inpaint").lower()
@@ -118,6 +121,26 @@ def _preview(space_id: str, layout: Layout, pano: PanoRef, guide_url: str, promp
         source_pano_id=pano.pano_id,
         guide_path=guide_url,
         model="preview-guide" + (f" (image generation unavailable: {why[:120]})" if why else ""),
+        prompt=prompt,
+        attempt=0,
+        score=None,
+    )
+
+
+def _floorplan_hero(space_id: str, layout: Layout, prompt: str) -> HeroImage:
+    from pipeline.queries import get_rooms  # Natnael's contract function
+
+    from agent.staging.guide import render_floorplan
+
+    plan = render_floorplan(layout, get_rooms(space_id))
+    return HeroImage(
+        hero_id=f"{layout.layout_id}-plan",
+        space_id=space_id,
+        layout_id=layout.layout_id,
+        path=plan,
+        source_pano_id="",
+        guide_path=plan,
+        model="floor-plan (no panoramas cached for this space)",
         prompt=prompt,
         attempt=0,
         score=None,
