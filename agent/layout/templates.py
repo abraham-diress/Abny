@@ -3,6 +3,10 @@
 Zones, from the entrance inward:
   entrance clear area -> seating (front of house) -> customer queue -> service line
   -> staff aisle -> back of house (against the back wall, or in a separate back room)
+
+Offices use the same pieces differently: no service line; the reception desk is an entry
+item (side wall by the door), the meeting table is an anchor (back room if there is one),
+desks are the "seats", and the kitchenette and storage are back of house.
 """
 
 from __future__ import annotations
@@ -27,6 +31,10 @@ class BusinessTemplate:
     staff_aisle_m: float = 1.0
     default_seats: int = 16
     prompt_hint: str = ""
+    entry_items: tuple[str, ...] = ()  # placed first, against a wall next to the entrance
+    anchor_items: tuple[str, ...] = ()  # free-standing, placed before seating (back room first)
+    strategies: tuple[str, ...] = ("back-counter", "side-counter")
+    seat_word: str = "seats"  # what seat_count counts, for notes ("desks" for offices)
 
 
 BAKERY = BusinessTemplate(
@@ -64,7 +72,25 @@ RETAIL = BusinessTemplate(
     prompt_hint="bright boutique retail store with wall shelving and a checkout counter",
 )
 
-TEMPLATES: dict[str, BusinessTemplate] = {"bakery": BAKERY, "cafe": CAFE, "retail": RETAIL}
+OFFICE = BusinessTemplate(
+    business_type="office",
+    service_line=(),
+    entry_items=("reception_desk",),
+    anchor_items=("meeting_table",),
+    boh_required=("kitchenette_counter",),
+    boh_optional=("storage_cabinet", "storage_cabinet"),
+    seating_free=("desk_pod",),  # pods fill the open floor; single desks line the side walls
+    seating_wall=("single_desk",),
+    foh_extras=("sofa", "phone_booth"),
+    staff_aisle_m=0.0,
+    default_seats=12,
+    strategies=("open-plan",),
+    seat_word="desks",
+    prompt_hint=("bright modern open-plan office with white desk pods, black task chairs and monitors, "
+                 "a wooden meeting table, a reception desk and a few plants"),
+)
+
+TEMPLATES: dict[str, BusinessTemplate] = {"bakery": BAKERY, "cafe": CAFE, "retail": RETAIL, "office": OFFICE}
 
 _TWO_OVENS = re.compile(r"\b(two|2|double)\s+(deck\s+)?ovens?\b", re.I)
 

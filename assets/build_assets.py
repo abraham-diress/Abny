@@ -72,6 +72,34 @@ def table_top(w, d, x=0.0, z=0.0) -> list[trimesh.Trimesh]:
     return [box(w, 0.04, d, x, 0.72, z, WOOD), box(0.06, 0.72, 0.06, x, 0, z, BLACK), box(0.45, 0.03, 0.45, x, 0, z, BLACK)]
 
 
+PLASTIC_WHITE = (232, 232, 228, 255)
+CHARCOAL = (60, 62, 66, 255)
+SCREEN = (25, 28, 32, 255)
+UPHOLSTERY = (85, 110, 140, 255)
+PLANT = (70, 120, 70, 255)
+
+
+def task_chair(x, z, facing_z: float) -> list[trimesh.Trimesh]:
+    """Office chair (0.55 wide) facing +z (facing_z=+1) or -z (-1): seat, back, post and base."""
+    back_z = z - 0.24 * facing_z
+    return [
+        box(0.5, 0.06, 0.5, x, 0.44, z, CHARCOAL),
+        box(0.48, 0.55, 0.05, x, 0.55, back_z, CHARCOAL),
+        cylinder(0.03, 0.4, x, 0.04, z, color=DARK_STEEL),
+        box(0.55, 0.04, 0.08, x, 0.0, z, BLACK),
+        box(0.08, 0.04, 0.55, x, 0.0, z, BLACK),
+    ]
+
+
+def office_desk(w, d, x, z, monitor_side: float) -> list[trimesh.Trimesh]:
+    """Desk top w x d at 0.74 m, two legs, a monitor at the `monitor_side` (+1/-1 along z) edge."""
+    parts = [box(w, 0.03, d, x, 0.72, z, PLASTIC_WHITE)]
+    parts += [box(0.04, 0.72, d * 0.9, x + sx, 0, z, DARK_STEEL) for sx in (-w / 2 + 0.03, w / 2 - 0.03)]
+    mz = z + monitor_side * (d / 2 - 0.12)
+    parts += [box(0.6, 0.36, 0.03, x, 0.9, mz, SCREEN), box(0.06, 0.16, 0.06, x, 0.75, mz, DARK_STEEL)]
+    return parts
+
+
 def build(item: dict) -> trimesh.Trimesh:
     t, w, d, h = item["item_type"], item["width_m"], item["depth_m"], item["height_m"]
     fz = d / 2  # front face z
@@ -125,6 +153,47 @@ def build(item: dict) -> trimesh.Trimesh:
         parts = [box(w, h, 0.03, z=-d / 2 + 0.015, color=WOOD)]
         parts += [box(0.03, h, d, x=sx, color=WOOD) for sx in (-w / 2 + 0.015, w / 2 - 0.015)]
         parts += [box(w, 0.025, d, y=k * h / 5, color=WOOD) for k in range(1, 5)]
+    elif t == "desk_pod":
+        # Two desks per side, facing each other across a low screen; chairs on the outside.
+        parts = [box(w * 0.98, 0.35, 0.03, y=0.75, color=FABRIC)]
+        for side in (-1, 1):
+            for dx in (-w / 4, w / 4):
+                parts += office_desk(w / 2 - 0.04, 0.7, dx, side * 0.36, monitor_side=-side)
+                parts += task_chair(dx, side * (0.7 + 0.45), facing_z=-side)
+    elif t == "single_desk":
+        # Desk against the wall (-z), chair in front of it (+z side).
+        parts = office_desk(w - 0.04, 0.7, 0, -d / 2 + 0.36, monitor_side=-1) + task_chair(0, -d / 2 + 0.7 + 0.42, facing_z=-1)
+    elif t == "meeting_table":
+        parts = [box(2.0, 0.04, 1.1, y=0.72, color=WOOD)]
+        parts += [box(0.08, 0.72, 0.8, x=sx, color=DARK_STEEL) for sx in (-0.75, 0.75)]
+        for dx in (-0.7, 0.0, 0.7):
+            parts += task_chair(dx, -0.95, facing_z=+1) + task_chair(dx, 0.95, facing_z=-1)
+        parts += [box(0.5, 0.05, 0.5, x=sx, y=0.44, color=CHARCOAL) for sx in (-1.03, 1.03)]
+        parts += [box(0.05, 0.5, 0.48, x=sx + 0.22 * (1 if sx > 0 else -1), y=0.5, color=CHARCOAL) for sx in (-1.03, 1.03)]
+        parts += [cylinder(0.03, 0.42, x=sx, y=0.02, color=DARK_STEEL) for sx in (-1.03, 1.03)]
+    elif t == "reception_desk":
+        # Visitors on +z; a raised top facing them; staff chair behind (-z, against the wall).
+        parts = [box(w, 1.05, 0.6, z=d / 2 - 0.3, color=WOOD), box(w, 0.04, 0.35, y=1.05, z=d / 2 - 0.18, color=PLASTIC_WHITE),
+                 box(w * 0.9, 0.03, 0.6, y=0.72, z=d / 2 - 0.85, color=PLASTIC_WHITE)]
+        parts += [box(0.6, 0.36, 0.03, y=0.9, z=d / 2 - 0.68, color=SCREEN)]
+        parts += task_chair(0, -d / 2 + 0.3, facing_z=+1)
+    elif t == "sofa":
+        parts = [box(w, 0.42, d, color=UPHOLSTERY), box(w, 0.43, 0.2, y=0.42, z=-d / 2 + 0.1, color=UPHOLSTERY)]
+        parts += [box(0.18, 0.2, d, x=sx, y=0.42, color=UPHOLSTERY) for sx in (-w / 2 + 0.09, w / 2 - 0.09)]
+    elif t == "phone_booth":
+        parts = [box(w, h, 0.05, z=-d / 2 + 0.025, color=CHARCOAL), box(w, 0.08, d, y=h - 0.08, color=CHARCOAL),
+                 box(w, 0.05, d, color=CHARCOAL), box(w * 0.96, h - 0.15, 0.02, y=0.05, z=d / 2 - 0.01, color=GLASS)]
+        parts += [box(0.05, h, d, x=sx, color=CHARCOAL) for sx in (-w / 2 + 0.025, w / 2 - 0.025)]
+        parts += [box(0.6, 0.03, 0.35, y=1.0, z=-d / 2 + 0.2, color=WOOD), box(0.4, 0.45, 0.4, color=UPHOLSTERY)]
+    elif t == "storage_cabinet":
+        parts = [box(w, h, d, color=PLASTIC_WHITE)]
+        parts += [box(0.02, h * 0.9, 0.01, x=0, y=h * 0.05, z=d / 2, color=CHARCOAL)]
+        parts += [box(0.03, 0.25, 0.03, x=sx, y=h * 0.45, z=d / 2 + 0.01, color=DARK_STEEL) for sx in (-0.08, 0.08)]
+    elif t == "kitchenette_counter":
+        parts = [box(w, 0.88, d, color=PLASTIC_WHITE), box(w, 0.04, d, y=0.88, color=DARK_WOOD),
+                 box(0.5, 0.03, 0.4, x=-w / 4, y=0.91, color=STEEL),
+                 box(w, 0.7, 0.35, y=1.5, z=-d / 2 + 0.175, color=PLASTIC_WHITE),
+                 box(0.55, 0.85, 0.55, x=w / 2 - 0.3, y=0.92, z=-0.02, color=DARK_STEEL)]  # fridge/coffee
     else:
         parts = [box(w, h, d)]
     mesh = trimesh.util.concatenate(parts)
