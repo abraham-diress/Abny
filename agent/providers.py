@@ -14,6 +14,7 @@ Set STRICT_PROVIDERS=1 to fail loudly instead of falling back (use before the de
 from __future__ import annotations
 
 import importlib
+import inspect
 import logging
 import os
 from typing import Any, Callable
@@ -56,6 +57,14 @@ draft_broker_email = _resolve("agent.analyst.costs", "draft_broker_email", sampl
 plan_layout = _resolve("agent.layout.planner", "plan_layout", samples.plan_layout)
 validate_layout = _resolve("agent.layout.validator", "validate_layout", samples.validate_layout)
 render_hero = _resolve("agent.staging.generate", "render_hero", samples.render_hero)
+
+
+def accepts(fn: Callable[..., Any] | None, param: str) -> bool:
+    """Does this teammate function take an optional parameter (e.g. neighborhood_profile(business_type=...))?"""
+    try:
+        return fn is not None and param in inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
 
 
 def using_sample_data() -> bool:

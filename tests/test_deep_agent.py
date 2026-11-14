@@ -18,8 +18,7 @@ def _call(name, args, i):
     return AIMessage(content="", tool_calls=[{"name": name, "args": args, "id": f"c{i}", "type": "tool_call"}])
 
 
-def test_deep_agent_stream_to_events(monkeypatch):
-    monkeypatch.setattr("agent.llm.llm_available", lambda: False)
+def test_deep_agent_stream_to_events(sample_db):
     script = [
         _call("write_todos", {"todos": [{"content": "Scout", "status": "in_progress"},
                                         {"content": "Publish", "status": "pending"}]}, 1),
@@ -29,9 +28,9 @@ def test_deep_agent_stream_to_events(monkeypatch):
         AIMessage(content="Shortlisted 5 spaces."),          # scout's final answer
         _call("pick_fitout_spaces", {"top_n": 3}, 5),
         _call("task", {"subagent_type": "designer", "description": "Layouts for the top 3"}, 6),
-        _call("design_layouts", {"space_ids": ["sample-hou-01", "sample-hou-02", "sample-hou-07"]}, 7),
+        _call("design_layouts", {"space_ids": ["sample-hou-01", "sample-hou-02", "sample-hou-03"]}, 7),
         AIMessage(content="All valid."),
-        _call("publish_results", {"space_ids": ["sample-hou-01", "sample-hou-02", "sample-hou-07"],
+        _call("publish_results", {"space_ids": ["sample-hou-01", "sample-hou-02", "sample-hou-03"],
                                   "reasons": {"sample-hou-01": "Best storefront"}}, 8),
         AIMessage(content="Done: 3 spaces published."),
     ]

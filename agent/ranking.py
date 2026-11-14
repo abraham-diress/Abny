@@ -124,8 +124,10 @@ def score_space(
     if insp and wants(brief, "kitchen") and insp.existing_kitchen is False:
         score -= 0.08
     score += _area_bonus(brief, space, reasons)
-    if numbers and numbers.breakeven_months_low is not None and numbers.breakeven_months_high is not None:
-        reasons.append((0.15, f"Break-even in about {numbers.breakeven_months_low:.0f}-{numbers.breakeven_months_high:.0f} months (estimate, see assumptions)"))
+    if numbers and numbers.breakeven_months_low is not None:
+        hi = numbers.breakeven_months_high
+        span = f"{numbers.breakeven_months_low:.0f}-{hi:.0f}" if hi is not None else f"{numbers.breakeven_months_low:.0f}+"
+        reasons.append((0.15, f"Break-even in about {span} months (estimate, see assumptions)"))
 
     return _finish(score, reasons)
 

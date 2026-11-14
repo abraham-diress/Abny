@@ -109,10 +109,10 @@ def inspect_space(space_id: str, business_type: str = "bakery") -> Inspection:
 
     if not images or not llm_available():
         reason = "no cached panoramas on disk" if not images else "no LLM credentials"
-        if P.using_sample_data():
+        if P.using_sample_data() or space_id.startswith("sample-"):  # synthetic spaces (ours or the sample DB)
             from agent import samples
 
-            insp = samples.sample_inspection(space_id, business_type)
+            insp = samples.sample_inspection(space_id, business_type, measured_ceiling)
             insp.notes.append(f"Vision skipped ({reason}).")
             return insp
         return Inspection(
