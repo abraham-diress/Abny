@@ -4,10 +4,13 @@ Steps: pick the panorama face that shows the most of the layout (furniture-free 
 render_guide (boxes + mask) -> generate N images -> score each -> keep the best -> one retry
 with new seeds if none pass.
 
+IMAGE_PROVIDER (env): gemini (default; GOOGLE_API_KEY) | bedrock_nova (AWS).
 HERO_MODE (env):
-  inpaint   (default) Nova Canvas repaints only the furniture area of the real photo
-  condition Nova Canvas generates from the guide's edges
-  preview   no AI: the guide image itself (frontend work without AWS, or demo fallback)
+  inpaint   (default) furniture painted into the real photo; the room outside the boxes is kept
+  condition the whole scene is generated from the guide image
+  preview   no AI: the guide image itself (frontend work, or demo fallback)
+If image generation fails (no key, quota, network), render_hero returns the preview instead of
+raising, so a result always has a picture; its `model` says why.
 """
 
 from __future__ import annotations
@@ -20,7 +23,7 @@ from datetime import datetime, timezone
 import cv2
 
 from agent.layout.templates import TEMPLATES
-from agent.staging import nova
+from agent.staging import gemini_image, nova
 from agent.staging.files import ensure_dirs, mask_url_for, to_path, to_url
 from agent.staging.guide import count_visible, render_guide
 from agent.staging.score import score_image
@@ -28,7 +31,7 @@ from shared.conventions import HEROES_DIR, RUNS_DIR
 from shared.schemas import HeroImage, ImageScore, Layout, PanoRef
 
 log = logging.getLogger("hestia.hero")
-VARIANTS = 2
+VARIANTS = int(os.environ.get("HERO_VARIANTS", "2"))
 MAX_ROUNDS = 2
 
 
@@ -40,18 +43,7 @@ def render_hero(space_id: str, layout: Layout, style: str | None = None) -> Hero
     mode = os.environ.get("HERO_MODE", "inpaint").lower()
 
     if mode == "preview":
-        return HeroImage(
-            hero_id=f"{layout.layout_id}-preview",
-            space_id=space_id,
-            layout_id=layout.layout_id,
-            path=guide_url,
-            source_pano_id=pano.pano_id,
-            guide_path=guide_url,
-            model="preview-guide",
-            prompt=prompt,
-            attempt=0,
-            score=None,
-        )
+        return _preview(space_id, layout, pano, guide_url, prompt)
 
     original = cv2.imread(str(to_path(pano.path)), cv2.IMREAD_COLOR)
     guide = cv2.imread(str(to_path(guide_url)), cv2.IMREAD_COLOR)
@@ -60,10 +52,13 @@ def render_hero(space_id: str, layout: Layout, style: str | None = None) -> Hero
     attempt = 0
     for round_ in range(MAX_ROUNDS):
         seed = 7 + round_ * 101
-        if mode == "condition":
-            images = nova.conditioned(guide, prompt, n=VARIANTS, seed=seed)
-        else:
-            images = nova.inpaint(original, mask, prompt, n=VARIANTS, seed=seed)
+        try:
+            images = generate_images(mode, original, guide, mask, prompt, n=VARIANTS, seed=seed)
+        except (nova.NovaError, gemini_image.GeminiImageError) as exc:
+            log.warning("hero %s: image generation failed: %s", layout.layout_id, exc)
+            if best is None:
+                return _preview(space_id, layout, pano, guide_url, prompt, why=str(exc))
+            break
         for k, img in enumerate(images):
             attempt += 1
             out = HEROES_DIR / f"{layout.layout_id}_{attempt}.png"
@@ -78,7 +73,7 @@ def render_hero(space_id: str, layout: Layout, style: str | None = None) -> Hero
             break
 
     if best is None:
-        raise nova.NovaError("Nova Canvas returned no images")
+        return _preview(space_id, layout, pano, guide_url, prompt, why="no images returned")
     s, url, att = best
     return HeroImage(
         hero_id=f"{layout.layout_id}-hero{att}",
@@ -87,10 +82,45 @@ def render_hero(space_id: str, layout: Layout, style: str | None = None) -> Hero
         path=url,
         source_pano_id=pano.pano_id,
         guide_path=guide_url,
-        model=f"{nova._model_id()} ({mode})",
+        model=f"{_model_name()} ({mode})",
         prompt=prompt,
         attempt=att,
         score=s,
+    )
+
+
+def provider() -> str:
+    return os.environ.get("IMAGE_PROVIDER", "gemini").lower()
+
+
+def _model_name() -> str:
+    return nova._model_id() if provider() == "bedrock_nova" else gemini_image.model_id()
+
+
+def generate_images(mode: str, original, guide, mask, prompt: str, n: int = 2, seed: int = 7) -> list:
+    """n images from the configured provider. inpaint keeps the real room; condition redraws it."""
+    if provider() == "bedrock_nova":
+        if mode == "condition":
+            return nova.conditioned(guide, prompt, n=n, seed=seed)
+        return nova.inpaint(original, mask, prompt, n=n, seed=seed)
+    if mode == "condition":
+        return gemini_image.condition(guide, prompt, n=n, seed=seed)
+    return gemini_image.edit(original, guide, mask, prompt, n=n, seed=seed)
+
+
+def _preview(space_id: str, layout: Layout, pano: PanoRef, guide_url: str, prompt: str, why: str | None = None) -> HeroImage:
+    """The guide image (plan drawn on the real photo) as the hero: no AI, always works."""
+    return HeroImage(
+        hero_id=f"{layout.layout_id}-preview",
+        space_id=space_id,
+        layout_id=layout.layout_id,
+        path=guide_url,
+        source_pano_id=pano.pano_id,
+        guide_path=guide_url,
+        model="preview-guide" + (f" (image generation unavailable: {why[:120]})" if why else ""),
+        prompt=prompt,
+        attempt=0,
+        score=None,
     )
 
 

@@ -56,7 +56,7 @@ def score_arrays(original: np.ndarray, generated: np.ndarray, mask: np.ndarray |
         if verdict.notes and verdict.notes.lower() != "ok":
             notes.append(verdict.notes)
     else:
-        notes.append("Realism not scored (LLM judge off).")
+        notes.append("Realism not scored (judge off or unavailable).")
 
     structure, plan = float(np.clip(structure, 0, 1)), float(np.clip(plan, 0, 1))
     passed = structure >= PASS_STRUCTURE and plan >= PASS_PLAN and realism >= PASS_REALISM

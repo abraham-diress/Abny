@@ -10,7 +10,7 @@ import trimesh
 
 from agent.layout.catalog import load_catalog
 from agent.layout.planner import plan_layout
-from agent.staging import generate, nova
+from agent.staging import gemini_image, generate, nova
 from agent.staging.camera import PanoCamera
 from agent.staging.files import mask_url_for, to_path, to_url
 from agent.staging.guide import count_visible, render_floorplan, render_guide
@@ -90,29 +90,63 @@ def test_scorer_rewards_change_only_inside_mask():
     assert score_arrays(img, moved_walls, mask, None).structure_preserved < s.structure_preserved - 0.2
 
 
-def test_hero_flow_with_fake_nova(single_room, bakery_brief, pano_file, monkeypatch, tmp_path):
+def _fake_paint(image, mask, n):
+    out = []
+    for k in range(n):
+        g = image.copy()
+        m = cv2.resize(mask, (g.shape[1], g.shape[0]))
+        g[m > 0] = (40 + 30 * k, 90, 150)
+        out.append(g)
+    return out
+
+
+@pytest.mark.parametrize("provider", ["gemini", "bedrock_nova"])
+def test_hero_flow_with_fake_provider(provider, single_room, bakery_brief, pano_file, monkeypatch, tmp_path):
     layout = plan_layout("S1", single_room, None, bakery_brief)
     monkeypatch.setattr(generate, "_panoramas", lambda space_id: [_pano(pano_file)])
-
-    def fake_inpaint(image, mask, prompt, n=2, seed=7, **kw):
-        out = []
-        for k in range(n):
-            g = image.copy()
-            m = cv2.resize(mask, (g.shape[1], g.shape[0]))
-            g[m > 0] = (40 + 30 * k, 90, 150)
-            out.append(g)
-        return out
-
-    monkeypatch.setattr(nova, "inpaint", fake_inpaint)
+    monkeypatch.setattr(gemini_image, "edit", lambda original, guide, mask, prompt, n=2, seed=7: _fake_paint(original, mask, n))
+    monkeypatch.setattr(nova, "inpaint", lambda image, mask, prompt, n=2, seed=7, **kw: _fake_paint(image, mask, n))
     monkeypatch.setattr(generate, "RUNS_DIR", tmp_path)  # keep the real hero log clean
+    monkeypatch.setenv("IMAGE_PROVIDER", provider)
+    monkeypatch.setenv("HERO_MODE", "inpaint")
     hero = generate.render_hero("S1", layout, style="light wood and white tile")
     assert hero.score is not None and hero.score.passed
     assert to_path(hero.path).exists() and hero.guide_path
     assert "light wood" in hero.prompt
+    assert ("gemini" in hero.model) == (provider == "gemini")
 
     monkeypatch.setenv("HERO_MODE", "preview")
     preview = generate.render_hero("S1", layout)
     assert preview.model == "preview-guide" and preview.path == preview.guide_path
+
+
+def test_hero_falls_back_to_preview_when_generation_fails(single_room, bakery_brief, pano_file, monkeypatch, tmp_path):
+    layout = plan_layout("S1", single_room, None, bakery_brief)
+    monkeypatch.setattr(generate, "_panoramas", lambda space_id: [_pano(pano_file)])
+    monkeypatch.setattr(generate, "RUNS_DIR", tmp_path)
+
+    def broken(*a, **kw):
+        raise gemini_image.GeminiImageError("quota exceeded")
+
+    monkeypatch.setattr(gemini_image, "edit", broken)
+    monkeypatch.setenv("IMAGE_PROVIDER", "gemini")
+    monkeypatch.setenv("HERO_MODE", "inpaint")
+    hero = generate.render_hero("S1", layout)
+    assert hero.path == hero.guide_path and hero.score is None
+    assert "quota exceeded" in hero.model
+
+
+def test_gemini_composite_keeps_the_room_outside_the_mask():
+    rng = np.random.default_rng(2)
+    room = (rng.random((300, 400, 3)) * 255).astype(np.uint8)
+    painted = np.zeros_like(room)
+    mask = np.zeros((300, 400), np.uint8)
+    mask[150:250, 100:300] = 255
+    out = gemini_image.composite(room, painted, mask)
+    assert np.array_equal(out[:60], room[:60])  # far from the furniture: the real photo
+    assert out[200, 200].max() <= 1  # inside the furniture area: the generated image
+    pm = gemini_image.placement_map(room, room, mask)
+    assert pm[:100].max() == 0 and pm[200, 200].any()  # black outside, colored inside
 
 
 def test_catalog_models_exist_and_match_sizes():

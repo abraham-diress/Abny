@@ -1,8 +1,9 @@
-"""Claude vision as an image judge: realism and "does it follow the plan".
+"""Vision-model image judge: realism and "does it follow the plan".
 
-Off by default; set SCORER_LLM=1 to enable. Uses LLM_PROVIDER (bedrock | anthropic):
-  bedrock:   AnthropicBedrockMantle, model BEDROCK_MODEL_ID (default anthropic.claude-opus-5-5)
+Off by default; set SCORER_LLM=1 to enable. Uses LLM_PROVIDER (gemini | anthropic | bedrock):
+  gemini:    model JUDGE_MODEL (default gemini-3.5-flash; flash-lite scores too generously), key GOOGLE_API_KEY
   anthropic: Anthropic, model ANTHROPIC_MODEL (default claude-opus-5-5)
+  bedrock:   AnthropicBedrockMantle, model BEDROCK_MODEL_ID (default anthropic.claude-opus-5-5)
 Returns None if disabled, unavailable, or the model declines; callers fall back to heuristics.
 """
 
@@ -11,6 +12,7 @@ from __future__ import annotations
 import base64
 import logging
 import os
+import time
 from functools import lru_cache
 
 import cv2
@@ -44,7 +46,7 @@ def enabled() -> bool:
 
 @lru_cache(maxsize=1)
 def _client_and_model():
-    provider = os.environ.get("LLM_PROVIDER", "bedrock").lower()
+    provider = os.environ.get("LLM_PROVIDER", "gemini").lower()
     if provider == "anthropic":
         from anthropic import Anthropic
 
@@ -57,18 +59,49 @@ def _client_and_model():
     )
 
 
-def _image_block(img: np.ndarray) -> dict:
+def _small(img: np.ndarray) -> np.ndarray:
     h, w = img.shape[:2]
     s = min(1.0, 1024 / max(h, w))
-    small = cv2.resize(img, (int(w * s), int(h * s))) if s < 1 else img
-    ok, buf = cv2.imencode(".jpg", small, [cv2.IMWRITE_JPEG_QUALITY, 88])
+    return cv2.resize(img, (int(w * s), int(h * s))) if s < 1 else img
+
+
+def _image_block(img: np.ndarray) -> dict:
+    ok, buf = cv2.imencode(".jpg", _small(img), [cv2.IMWRITE_JPEG_QUALITY, 88])
     data = base64.standard_b64encode(buf.tobytes()).decode("utf-8")
     return {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": data}}
+
+
+def _judge_gemini(images: list[np.ndarray]) -> JudgeResult | None:
+    from google import genai
+    from google.genai import types
+
+    client = genai.Client(api_key=os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY"))
+    parts = []
+    for img in images:
+        ok, buf = cv2.imencode(".jpg", _small(img), [cv2.IMWRITE_JPEG_QUALITY, 88])
+        parts.append(types.Part.from_bytes(data=buf.tobytes(), mime_type="image/jpeg"))
+    resp = client.models.generate_content(
+        model=os.environ.get("JUDGE_MODEL", "gemini-3.5-flash"),
+        contents=[*parts, RUBRIC],
+        config=types.GenerateContentConfig(response_mime_type="application/json", response_schema=JudgeResult),
+    )
+    return resp.parsed if isinstance(resp.parsed, JudgeResult) else JudgeResult.model_validate_json(resp.text)
 
 
 def judge(original: np.ndarray, guide: np.ndarray | None, generated: np.ndarray) -> JudgeResult | None:
     if not enabled():
         return None
+    if os.environ.get("LLM_PROVIDER", "gemini").lower() == "gemini":
+        for attempt in range(2):  # one retry: Gemini returns 503/429 under load
+            try:
+                return _judge_gemini([original, guide if guide is not None else original, generated])
+            except Exception as exc:  # noqa: BLE001 - judging is best-effort
+                busy = any(code in str(exc) for code in ("503", "429", "UNAVAILABLE", "RESOURCE_EXHAUSTED"))
+                if attempt == 0 and busy:
+                    time.sleep(5)
+                    continue
+                log.warning("Judge unavailable: %s", exc)
+                return None
     try:
         client, model = _client_and_model()
         content = [_image_block(original), _image_block(guide if guide is not None else original), _image_block(generated)]
