@@ -504,6 +504,27 @@ def broker_contact(space_id: str) -> dict:
     return r[0] if r else {}
 
 
+def count_spaces(business_type: str | None = None) -> int:
+    """Size of the searchable set: the funnel's starting "total" (e.g. 3,000 -> 200 -> 20 -> 5).
+
+    Same base filters as query_spaces (coordinates, Houston/LA, has a scan, scan isn't an apartment),
+    without the brief's size/rent limits. Pass a business type to count only the spaces that type can
+    use (office -> office spaces, anything else -> retail/restaurant); with no argument, counts both.
+    """
+    where = ["lat IS NOT NULL", "lon IS NOT NULL", "city IS NOT NULL"]
+    if REQUIRE_SCAN:
+        where.append("has_scan")
+    if business_type is not None:
+        where.append(OFFICE_SPACES_SQL if is_office(business_type) else RETAIL_SPACES_SQL)
+    else:
+        where.append(f"({OFFICE_SPACES_SQL} OR {RETAIL_SPACES_SQL})")
+    with connect() as con:
+        if table_exists(con, "mp_model_info"):
+            where.append("(matterport_model_id IS NULL OR matterport_model_id NOT IN "
+                         "(SELECT model_id FROM mp_model_info WHERE is_residential))")
+        return int(con.execute(f"SELECT count(*) FROM spaces WHERE {' AND '.join(where)}").fetchone()[0])
+
+
 def listing_details(space_id: str) -> dict:
     """Broker contact + rent basis for a space (columns not on the Space schema)."""
     with connect() as con:

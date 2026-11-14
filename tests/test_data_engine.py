@@ -223,3 +223,28 @@ def test_office_layout_desks_override_brief(sample_db):
     n = estimate_costs(s, lay, None, OFFICE_BRIEF)
     assert any(a.name == "desks" and a.value == 20 for a in n.assumptions)
     assert any(a.name == "furniture_from_layout" for a in n.assumptions)
+
+
+def test_every_catalog_item_has_a_price():
+    """Yared's catalog and the cost table must stay in sync (unknown types silently use the default)."""
+    from agent.analyst import benchmarks as B
+    from shared.conventions import CATALOG_PATH
+
+    if not CATALOG_PATH.exists():
+        pytest.skip("assets/catalog.json not present")
+    items = [c["item_type"] for c in json.loads(CATALOG_PATH.read_text(encoding="utf-8"))]
+    missing = [t for t in items if t not in B.ITEM_COST and t not in B.OFFICE_ITEM_COST]
+    assert not missing, f"add prices to agent/analyst/benchmarks.py for: {missing}"
+    for t in items:
+        lo, hi = B.ITEM_COST.get(t) or B.OFFICE_ITEM_COST[t]
+        assert 0 < lo <= hi
+
+
+def test_count_spaces(sample_db):
+    from pipeline.queries import count_spaces, query_spaces
+
+    total, bakery, office = count_spaces(), count_spaces("bakery"), count_spaces("office")
+    assert (bakery, office) == (12, 4) and total == 16
+    assert count_spaces("cafe") == bakery  # every non-office type uses retail spaces
+    # the funnel narrows: total >= what a brief's filter returns
+    assert len(query_spaces(Brief(business_type="bakery", city="Houston", max_rent_month=6000))) <= bakery
