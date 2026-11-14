@@ -120,7 +120,9 @@ class Brief(Contract):
     business_type: BusinessType = "bakery"
     city: City | None = None
     area_hint: str | None = Field(None, description="Free text like 'near downtown' or 'close to transit'")
-    seats_wanted: int | None = Field(None, ge=0)
+    seats_wanted: int | None = Field(
+        None, ge=0, description="Customer seats for food businesses; desks (= headcount) for offices"
+    )
     sqft_min: float | None = Field(None, ge=0)
     sqft_max: float | None = Field(None, ge=0)
     max_rent_month: float | None = Field(None, ge=0)
@@ -195,7 +197,9 @@ class PanoRef(Contract):
 
 class POI(Contract):
     name: str
-    kind: str = Field(..., description="competitor | transit | parking | anchor | residential | other")
+    kind: str = Field(
+        ..., description="competitor | transit | parking | anchor | residential | amenity (food/gym near an office) | other"
+    )
     lat: float
     lon: float
     distance_m: float
@@ -207,7 +211,8 @@ class NeighborhoodProfile(Contract):
     nearby_tenant_count: int = 0
     nearby_employees_est: int | None = None
     nearby_residential_units: int = 0
-    competitors: list[POI] = Field(default_factory=list)
+    competitors: list[POI] = Field(default_factory=list, description="Same-business tenants nearby; empty for offices")
+    amenities: list[POI] = Field(default_factory=list, description="Food, cafés, gyms within walking distance (offices)")
     transit: list[POI] = Field(default_factory=list)
     parking_score: float | None = Field(None, ge=0, le=1)
     parking_notes: str | None = None
@@ -231,6 +236,10 @@ class Inspection(Contract):
     existing_restroom: bool | None = None
     vent_hood: bool | None = None
     ceiling_height_m: float | None = None
+    natural_light: float | None = Field(None, ge=0, le=1, description="0 = no daylight, 1 = windows on most walls (key for offices)")
+    existing_build_out: str | None = Field(
+        None, description="What is already built: 'open plan', 'private offices', 'restaurant kitchen', 'shell'..."
+    )
     notes: list[str] = Field(default_factory=list)
     pano_ids: list[str] = Field(default_factory=list)
     confidence: float = Field(0.5, ge=0, le=1)
@@ -337,10 +346,14 @@ class Numbers(Contract):
     rent_month: float | None = None
     fitout_cost_low: float
     fitout_cost_high: float
-    revenue_month_low: float
-    revenue_month_high: float
-    breakeven_months_low: float | None = None
+    revenue_month_low: float = Field(0.0, description="0 for offices (they don't sell to walk-in customers)")
+    revenue_month_high: float = 0.0
+    breakeven_months_low: float | None = Field(None, description="None for offices")
     breakeven_months_high: float | None = None
+    cost_per_seat_month_low: float | None = Field(
+        None, description="(rent + fit-out spread over the lease) / seats or desks. The headline number for offices"
+    )
+    cost_per_seat_month_high: float | None = None
     assumptions: list[Assumption] = Field(default_factory=list)
     citations: list[Citation] = Field(default_factory=list)
 
