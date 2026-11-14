@@ -276,7 +276,8 @@ def _neighborhood_cached(space_id: str, business_type: str) -> NeighborhoodProfi
             return [g for g in got if g["distance_m"] <= radius]
 
         def tenant_pois(kind: str, keywords: list[str], radius: float) -> list[POI]:
-            pattern = "|".join(re.escape(k) for k in keywords)
+            # Whole words only: "pho" must not match "Phoenix"/"Photography", nor "bake" match "Baker Botts".
+            pattern = r"\b(" + "|".join(re.escape(k) for k in keywords) + r")\b"
             hits = near("tenants", radius, "name, category, lat, lon, dataset, record_id",
                         "AND regexp_matches(lower(COALESCE(name,'') || ' ' || COALESCE(category,'')), ?)", [pattern])
             hits.sort(key=lambda c: c["distance_m"])
