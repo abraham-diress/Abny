@@ -248,3 +248,26 @@ def test_count_spaces(sample_db):
     assert count_spaces("cafe") == bakery  # every non-office type uses retail spaces
     # the funnel narrows: total >= what a brief's filter returns
     assert len(query_spaces(Brief(business_type="bakery", city="Houston", max_rent_month=6000))) <= bakery
+
+
+def test_pack_demo(sample_db, tmp_path, monkeypatch):
+    """The zip has the README + a database copy whose panos only belong to demo spaces."""
+    import zipfile
+
+    import duckdb
+
+    from pipeline import pack_demo
+
+    out = pack_demo.build(tmp_path / "demo.zip", all_media=False)
+    z = zipfile.ZipFile(out)
+    names = set(z.namelist())
+    assert {"HESTIA_DEMO_DATA_README.txt", "data/hestia.duckdb"} <= names
+    z.extract("data/hestia.duckdb", tmp_path / "x")
+    con = duckdb.connect(str(tmp_path / "x" / "data" / "hestia.duckdb"), read_only=True)
+    demo_models = {r[0] for r in con.execute(
+        "SELECT s.matterport_model_id FROM candidates c JOIN spaces s USING (space_id) WHERE c.priority = 0").fetchall()}
+    pano_models = {r[0] for r in con.execute("SELECT DISTINCT model_id FROM mp_panos").fetchall()}
+    con.close()
+    assert demo_models and pano_models <= demo_models
+    assert all(n.startswith("data/media/") for n in names - {"HESTIA_DEMO_DATA_README.txt", "data/hestia.duckdb"})
+    assert "sample-hou-01" in z.read("HESTIA_DEMO_DATA_README.txt").decode()
