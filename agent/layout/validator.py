@@ -55,10 +55,10 @@ def validate_layout(layout: Layout, rooms: list[Room]) -> ValidationReport:
                 )
 
     # --- entrance ------------------------------------------------------------
-    entrance_zone = _entrance_zone(layout, rooms, floor)
-    if entrance_zone is not None:
+    zone = entrance_zone(layout, rooms, floor)
+    if zone is not None:
         for it in items:
-            if fps[it.item_id].intersection(entrance_zone).area > 0.01:
+            if fps[it.item_id].intersection(zone).area > 0.01:
                 violations.append(
                     Violation(kind="entrance_blocked", item_ids=[it.item_id], message=f"{it.item_type} blocks the entrance clear area")
                 )
@@ -194,7 +194,7 @@ def _entrance_frame(layout: Layout, rooms: list[Room], floor: Polygon) -> tuple[
     return Frame(origin=e, t=t, n=n), width
 
 
-def _entrance_zone(layout: Layout, rooms: list[Room], floor: Polygon) -> Polygon | None:
+def entrance_zone(layout: Layout, rooms: list[Room], floor: Polygon) -> Polygon | None:
     got = _entrance_frame(layout, rooms, floor)
     if got is None:
         return None

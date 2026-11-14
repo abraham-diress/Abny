@@ -1,14 +1,14 @@
 """Project 3D points (Matterport model space) into a panorama image.
 
-Assumed camera convention (three.js / Matterport SDK style, VERIFY at gate G4 on a real scan):
-* PanoRef.rotation_quat (x, y, z, w) rotates camera-local vectors into model space.
-* In camera-local space the camera looks down -z, +y is up, +x is right.
-* Cube faces are views from the same point: front looks -z, right +x, left -x,
-  back +z, up +y, down -y (all in camera-local space).
+Camera convention, CALIBRATED at gate G4 on 5 real scans (118 panorama faces): of all 48 ways
+to read the pose, this one put each room's floor outline on the visible floor/wall edges
+(score 0.47-0.77; the next best 0.33), and its four faces form a consistent cube.
+* PanoRef.rotation_quat (x, y, z, w) rotates the camera's local frame into model space (y-up).
+* The camera's local frame is Matterport-native: +z is up, the "front" face looks along +x,
+  "left" along +y, "back" along -x, "right" along -y.
+* Each face is a 90-degree pinhole image: forward = the face direction, image-up = local +z.
 * An equirect image maps longitude across the width (center = front) and latitude down the height.
-
-If a real scan shows boxes in the wrong place, flip FLIP_X / FLIP_Z or swap the face table
-below; nothing else depends on these choices.
+Re-check with the calibration in eval/g4_camera_check.py if the data pipeline changes.
 """
 
 from __future__ import annotations
@@ -18,10 +18,6 @@ import math
 import numpy as np
 
 from shared.schemas import PanoRef
-
-FLIP_X = False
-FLIP_Z = False
-
 
 def quat_to_matrix(q: tuple[float, float, float, float] | None) -> np.ndarray:
     if q is None:
@@ -38,44 +34,38 @@ def quat_to_matrix(q: tuple[float, float, float, float] | None) -> np.ndarray:
     )
 
 
-def _rot_y(deg: float) -> np.ndarray:
-    t = math.radians(deg)
-    return np.array([[math.cos(t), 0, math.sin(t)], [0, 1, 0], [-math.sin(t), 0, math.cos(t)]])
-
-
-def _rot_x(deg: float) -> np.ndarray:
-    t = math.radians(deg)
-    return np.array([[1, 0, 0], [0, math.cos(t), -math.sin(t)], [0, math.sin(t), math.cos(t)]])
-
-
-# face-local -> camera-local
-FACE_ROTATION = {
-    "front": np.eye(3),
-    "right": _rot_y(-90),
-    "left": _rot_y(90),
-    "back": _rot_y(180),
-    "up": _rot_x(90),
-    "down": _rot_x(-90),
-    "equirect": np.eye(3),
+LOCAL_UP = np.array([0.0, 0.0, 1.0])
+# Face -> view direction in the camera's local frame.
+FACE_FORWARD = {
+    "front": np.array([1.0, 0.0, 0.0]),
+    "back": np.array([-1.0, 0.0, 0.0]),
+    "left": np.array([0.0, 1.0, 0.0]),
+    "right": np.array([0.0, -1.0, 0.0]),
+    "up": np.array([0.0, 0.0, 1.0]),
+    "down": np.array([0.0, 0.0, -1.0]),
+    "equirect": np.array([1.0, 0.0, 0.0]),
 }
+
+
+def face_matrix(face: str) -> np.ndarray:
+    """Rows: the face image's right, up and backward (-forward) axes in the camera's local frame."""
+    fwd = FACE_FORWARD.get(face, FACE_FORWARD["front"])
+    up = LOCAL_UP if abs(fwd @ LOCAL_UP) < 0.9 else np.array([-1.0, 0.0, 0.0]) * np.sign(fwd @ LOCAL_UP)
+    right = np.cross(fwd, up)
+    return np.stack([right, up, -fwd])
 
 
 class PanoCamera:
     def __init__(self, pano: PanoRef) -> None:
         self.pano = pano
         self.center = np.array(pano.position_m, dtype=float)
-        r = quat_to_matrix(pano.rotation_quat) @ FACE_ROTATION.get(pano.face, np.eye(3))
-        self.world_to_cam = r.T
+        # world -> camera-local (R^T) -> face image axes (x right, y up, looking down -z)
+        self.world_to_cam = face_matrix(pano.face) @ quat_to_matrix(pano.rotation_quat).T
         self.w, self.h = pano.width_px, pano.height_px
         self.f = (self.w / 2) / math.tan(math.radians(pano.fov_deg) / 2)
 
     def to_camera(self, pts: np.ndarray) -> np.ndarray:
-        cam = (pts - self.center) @ self.world_to_cam.T
-        if FLIP_X:
-            cam[:, 0] *= -1
-        if FLIP_Z:
-            cam[:, 2] *= -1
-        return cam
+        return (pts - self.center) @ self.world_to_cam.T
 
     def project(self, pts: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """Nx3 model-space points -> (Nx2 pixel coords, N bool 'in front of camera')."""

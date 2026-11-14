@@ -57,7 +57,7 @@ def draw_items(img: np.ndarray, layout: Layout, pano: PanoRef, floor_y: float) -
     overlay = img.copy()
     mask = np.zeros((h, w), dtype=np.uint8)
     drawn = []
-    for item in layout.items:
+    for item in _in_camera_room(layout, pano):
         corners = box_corners(item.x_m, item.z_m, item.width_m, item.depth_m, item.height_m, item.rotation_deg, floor_y)
         px, ok = cam.project(corners)
         if not ok.all():
@@ -82,12 +82,44 @@ def draw_items(img: np.ndarray, layout: Layout, pano: PanoRef, floor_y: float) -
     return guide, mask, len(drawn)
 
 
+def _in_camera_room(layout: Layout, pano: PanoRef) -> list:
+    """Items the camera can actually see: those in its own room (walls hide the rest).
+    Panoramas without a room id see everything."""
+    if not pano.room_id:
+        return list(layout.items)
+    return [i for i in layout.items if i.room_id == pano.room_id]
+
+
+def view_score(layout: Layout, pano: PanoRef, floor_y: float | None = None) -> float:
+    """How good this face is as the hero view: items fully in frame at a readable size count most;
+    an item filling the foreground (camera right next to it) counts against the view."""
+    cam = PanoCamera(pano)
+    fy = _floor_y(layout, pano) if floor_y is None else floor_y
+    w, h = pano.width_px, pano.height_px
+    score = 0.0
+    for item in _in_camera_room(layout, pano):
+        corners = box_corners(item.x_m, item.z_m, item.width_m, item.depth_m, item.height_m, item.rotation_deg, fy)
+        px, ok = cam.project(corners)
+        if not ok.all():
+            continue
+        inside = (px[:, 0] >= 0) & (px[:, 0] < w) & (px[:, 1] >= 0) & (px[:, 1] < h)
+        hull = cv2.convexHull(px.astype(np.float32))
+        frac = cv2.contourArea(hull) / float(w * h)
+        if frac > 0.3:
+            score -= 1.0  # blocks the view
+        elif inside.all() and frac >= 0.003:
+            score += 1.0 + 0.5 * min(frac, 0.05) / 0.05
+        elif inside.any():
+            score += 0.3
+    return score
+
+
 def count_visible(layout: Layout, pano: PanoRef, floor_y: float | None = None) -> int:
-    """How many of the layout's items this panorama face shows (used to pick the hero view)."""
+    """How many of the layout's items this panorama face shows (center in frame, camera's room only)."""
     cam = PanoCamera(pano)
     fy = _floor_y(layout, pano) if floor_y is None else floor_y
     n = 0
-    for item in layout.items:
+    for item in _in_camera_room(layout, pano):
         corners = box_corners(item.x_m, item.z_m, item.width_m, item.depth_m, item.height_m, item.rotation_deg, fy)
         px, ok = cam.project(corners)
         if ok.all():

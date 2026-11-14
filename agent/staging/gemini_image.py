@@ -26,18 +26,16 @@ MAX_SIDE = 1024
 DEFAULT_MODEL = "gemini-3.1-flash-image"
 
 EDIT_INSTRUCTIONS = (
-    "Image 1 is a real photo of an empty commercial room. Image 2 is a placement map for image 1, same "
-    "framing: black means leave unchanged, colored areas show where furniture goes (amber = service counter "
-    "or reception desk, blue = kitchen equipment or storage, green = tables, desks and seating, purple = "
-    "other items). Edit image 1: add realistic furniture that fills each colored area, at real-world scale, "
-    "standing on the floor. Image 2 is only a map: never copy its colors, outlines or boxes into the photo, "
-    "and add no text. Keep the walls, windows, doors, floor, ceiling, lighting and camera angle exactly as in "
-    "image 1. Return one photorealistic image with the same framing as image 1."
+    "Image 1 is a real photo of an empty commercial room. Image 2 is the same photo with everything darkened "
+    "except the areas where furniture goes. Edit image 1: add realistic furniture inside the bright areas of "
+    "image 2, at real-world scale, standing on the floor, and nothing elsewhere. The floor keeps its real "
+    "material and color. Add no people and no text. Keep the walls, windows, doors, floor, ceiling, lighting "
+    "and camera angle exactly as in image 1. Return one photorealistic image with the same framing as image 1."
 )
 CONDITION_INSTRUCTIONS = (
     "This photo shows a room with colored boxes marking where furniture goes. Produce a photorealistic "
     "photo of the same room from the same camera angle with real furniture inside each box and no boxes "
-    "or text. Keep the room's walls, windows, doors, floor and ceiling where they are."
+    "or text, and no people. Keep the room's walls, windows, doors, floor and ceiling where they are."
 )
 
 
@@ -111,13 +109,13 @@ def _one(contents: list, aspect: str, seed: int) -> np.ndarray:
 
 
 def placement_map(original: np.ndarray, guide: np.ndarray, mask: np.ndarray) -> np.ndarray:
-    """The guide's colors inside the furniture areas, black everywhere else (nothing to copy from)."""
-    g = cv2.resize(guide, (original.shape[1], original.shape[0]))
-    m = cv2.resize(mask, (original.shape[1], original.shape[0]), interpolation=cv2.INTER_NEAREST) > 127
-    tint = cv2.absdiff(g, original).sum(axis=2) > 30  # pixels the guide colored
-    out = np.zeros_like(original)
-    out[m] = (0, 190, 255)  # default amber (BGR) where the mask has no clear tint
-    out[m & tint] = g[m & tint]
+    """The photo with everything outside the furniture areas darkened: shows where furniture goes
+    without any foreign colors Gemini could copy into the room (an earlier colored map got painted
+    onto the floor). `guide` is unused; kept so callers don't change."""
+    h, w = original.shape[:2]
+    m = cv2.resize(mask, (w, h), interpolation=cv2.INTER_NEAREST) > 127
+    out = (original.astype(np.float32) * 0.18).astype(np.uint8)
+    out[m] = original[m]
     return out
 
 

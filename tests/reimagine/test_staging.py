@@ -36,8 +36,10 @@ def pano_file(tmp_path, monkeypatch):
 
 def _pano(url: str) -> PanoRef:
     # Camera at the back of the single room looking toward the entrance (-z), 1.55 m up.
+    # Matterport camera frame (calibrated at G4): z-up, front looks +x. This rotation maps that
+    # frame to front = -z, up = +y in model space; real scans have almost exactly this quaternion.
     return PanoRef(pano_id="P1", space_id="S1", scan_id="scan1", face="front", path=url, defurnished=True,
-                   position_m=(4.5, 1.55, 11.0), rotation_quat=None, fov_deg=90, width_px=640, height_px=640)
+                   position_m=(4.5, 1.55, 11.0), rotation_quat=(-0.5, 0.5, 0.5, 0.5), fov_deg=90, width_px=640, height_px=640)
 
 
 def test_point_straight_ahead_projects_to_center(pano_file):
@@ -146,7 +148,8 @@ def test_gemini_composite_keeps_the_room_outside_the_mask():
     assert np.array_equal(out[:60], room[:60])  # far from the furniture: the real photo
     assert out[200, 200].max() <= 1  # inside the furniture area: the generated image
     pm = gemini_image.placement_map(room, room, mask)
-    assert pm[:100].max() == 0 and pm[200, 200].any()  # black outside, colored inside
+    assert np.array_equal(pm[200, 200], room[200, 200])  # furniture area: the real photo
+    assert pm[:100].mean() < 0.3 * room[:100].mean()  # elsewhere: darkened, no new colors
 
 
 def test_catalog_models_exist_and_match_sizes():
@@ -182,3 +185,15 @@ def test_floor_height_ignores_unset_room_floor(single_room, bakery_brief, pano_f
     high_cam = _pano(pano_file).model_copy(update={"position_m": (4.5, 11.55, 11.0)})  # floor really at y = 10
     assert guide._floor_y(layout, high_cam) == pytest.approx(10.0)
     assert guide._floor_y(layout, _pano(pano_file)) == pytest.approx(0.0)  # consistent data is trusted
+
+
+def test_cube_faces_turn_the_right_way(pano_file):
+    """front looks -z here; left is a quarter turn left (-x), right (+x), back (+z)."""
+    base = _pano(pano_file)
+    ahead = {"front": (4.5, 1.55, 5.0), "left": (-1.5, 1.55, 11.0), "right": (10.5, 1.55, 11.0), "back": (4.5, 1.55, 17.0)}
+    for face, point in ahead.items():
+        px, ok = PanoCamera(base.model_copy(update={"face": face})).project(np.array([point]))
+        assert ok[0] and px[0] == pytest.approx([320, 320]), face
+    # A point on the floor in front of the camera is below the image center.
+    px, _ = PanoCamera(base).project(np.array([[4.5, 0.0, 6.0]]))
+    assert px[0][1] > 320

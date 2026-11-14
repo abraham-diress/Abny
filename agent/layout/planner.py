@@ -35,6 +35,7 @@ from agent.layout.geometry import (
     Frame,
     edges,
     facing_rotation,
+    is_void,
     footprint,
     front_zone,
     inward_normal,
@@ -44,12 +45,13 @@ from agent.layout.geometry import (
     unit,
 )
 from agent.layout.templates import BusinessTemplate, target_seats, template_for
-from agent.layout.validator import unreachable_items, validate_layout
+from agent.layout.validator import entrance_zone, unreachable_items, validate_layout
 from shared.conventions import DOOR_CLEARANCE_M, MIN_AISLE_M
 from shared.schemas import Brief, CatalogItem, Inspection, Layout, LayoutItem, Room
 
 STRATEGIES = ("back-counter", "side-counter")
 GRID_STEP_M = 0.2
+MAIN_ROOM_SHARE = 0.4  # a room this share of the biggest room's area can hold the business
 ANCHOR_M2_PER_SEAT = 6.0  # floor a seat/desk needs (with aisles) before an anchor may share the open area
 EXCLUDED_ROOM_WORDS = ("bath", "restroom", "toilet", "wc", "closet", "stair", "elevator")
 
@@ -126,18 +128,21 @@ class Site:
 
 def analyze_site(rooms: list[Room]) -> Site:
     notes: list[str] = []
-    usable = [r for r in rooms if not _excluded(r)] or rooms
+    usable = [r for r in rooms if not _excluded(r) and not is_void(r)] or rooms
+    # The business goes in a main room: ignore small front offices/vestibules when choosing the entrance.
+    biggest = max(room_polygon(r).area for r in usable)
+    main = [r for r in usable if room_polygon(r).area >= MAIN_ROOM_SHARE * biggest]
 
-    # Entrance: exterior door > storefront windows > longest wall of the largest room.
+    # Entrance: exterior door of a main room > storefront windows > longest wall of the largest room.
     entrance = None
-    for room in usable:
+    for room in main:
         for op in room.openings:
             if op.kind == "door" and _is_exterior(op.a, op.b, room, rooms):
                 cand = (room, op.a, op.b)
                 if entrance is None or _window_len(room) > _window_len(entrance[0]):
                     entrance = cand
     if entrance is None:
-        best = max(usable, key=_window_len)
+        best = max(main, key=_window_len)
         win = [op for op in best.openings if op.kind == "window"]
         if win:
             op = max(win, key=lambda o: Point(o.a).distance(Point(o.b)))
@@ -152,6 +157,7 @@ def analyze_site(rooms: list[Room]) -> Site:
 
     front, a, b = entrance
     floor_rooms = [r for r in rooms if r.floor_index == front.floor_index]
+    solid_rooms = [r for r in floor_rooms if not is_void(r)]
     fpoly = room_polygon(front)
     mid = ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
     ea, eb = nearest_edge(fpoly, mid)
@@ -166,10 +172,14 @@ def analyze_site(rooms: list[Room]) -> Site:
     # Back room: adjacent, not a restroom, big enough for a kitchen; prefer 'kitchen'.
     back = None
     candidates = [
-        r for r in floor_rooms
+        r for r in solid_rooms
         if r.room_id != front.room_id and not _excluded(r) and room_polygon(r).area >= 6.0
         and room_polygon(r).distance(fpoly) < 0.3
     ]
+    # ...and toward the back: a side office next to the entrance is not a kitchen.
+    frame = Frame(origin=origin, t=t, n=n)
+    v_lo, v_hi = frame.depth_extent(fpoly)
+    candidates = [r for r in candidates if frame.to_local(_centroid(r))[1] > (v_lo + v_hi) / 2]
     if candidates:
         back = max(candidates, key=lambda r: (("kitchen" in (r.room_type or r.label or "").lower()), room_polygon(r).area))
 
@@ -190,7 +200,7 @@ def analyze_site(rooms: list[Room]) -> Site:
             notes.append("Doorway to the back room not marked in the scan; assumed one where the rooms meet.")
 
     windows = [LineString([o.a, o.b]) for r in floor_rooms for o in r.openings if o.kind == "window"]
-    overlap = rooms_overlap(floor_rooms)
+    overlap = rooms_overlap(solid_rooms)
     if overlap:
         notes.insert(0, f"WARNING: rooms {overlap[0]} and {overlap[1]} overlap in the data (room positions may be missing); "
                         "furniture may not line up with the 3D tour.")
@@ -198,7 +208,7 @@ def analyze_site(rooms: list[Room]) -> Site:
         floor_rooms=floor_rooms,
         front=front,
         back=back,
-        frame=Frame(origin=origin, t=t, n=n),
+        frame=frame,
         door_width=door_width,
         entrance=origin,
         back_opening=back_opening,
@@ -226,6 +236,11 @@ def _named_room(site: Site, words: tuple[str, ...]) -> Room | None:
         if r.room_id != site.front.room_id and any(w in text for w in words):
             return r
     return None
+
+
+def _centroid(room: Room) -> tuple[float, float]:
+    c = room_polygon(room).centroid
+    return (c.x, c.y)
 
 
 def _excluded(room: Room) -> bool:
@@ -352,6 +367,10 @@ def _plan_one(space_id: str, site: Site, rooms: list[Room], catalog, tpl: Busine
     placer.keep_out(Polygon([frame.to_world(-hw, -0.1), frame.to_world(hw, -0.1), frame.to_world(hw, DOOR_CLEARANCE_M), frame.to_world(-hw, DOOR_CLEARANCE_M)]))
     if site.back_opening is not None:
         placer.keep_out(Point(site.back_opening).buffer(0.9))
+    # Also keep clear exactly the area the validator checks (it measures from the merged floor outline).
+    checked = entrance_zone(_layout(placer, space_id, layout_id, tpl, site, strategy, notes), site.floor_rooms, floor)
+    if checked is not None:
+        placer.keep_out(checked)
 
     v_min, v_max = frame.depth_extent(fpoly)
     service_types = [t for t in tpl.service_line if t in catalog]
@@ -375,6 +394,8 @@ def _plan_one(space_id: str, site: Site, rooms: list[Room], catalog, tpl: Busine
             boh_region = site.back_poly if site.back is not None else frame.band(fpoly, v_line + svc_depth / 2, v_max + 1)
         else:
             boh_region = site.back_poly if site.back is not None else fpoly
+            if not _place_service_on_wall(placer, site, catalog, tpl, fpoly, frame, notes):
+                notes.append("Could not fit the service counter.")
     else:  # side-counter (or no service line)
         if service_types and not _place_service_on_wall(placer, site, catalog, tpl, fpoly, frame, notes):
             notes.append("Could not fit the service counter.")
@@ -746,7 +767,7 @@ def _segments(geom) -> list[LineString]:
 
 def _room_at(rooms: list[Room], x: float, z: float) -> str:
     p = Point(x, z)
-    best = min(rooms, key=lambda r: room_polygon(r).distance(p))
+    best = min([r for r in rooms if not is_void(r)] or rooms, key=lambda r: room_polygon(r).distance(p))
     return best.room_id
 
 
