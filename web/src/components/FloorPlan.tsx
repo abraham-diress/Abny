@@ -2,11 +2,11 @@ import { isOfficeType, seatWord } from "@/lib/business";
 import type { Layout, Room, XZ, Zone } from "@/types/schemas";
 
 const ZONE_FILL: Record<Zone, string> = {
-  seating: "#d99a4e",
-  service: "#c0623f",
-  back_of_house: "#6b7a8c",
-  front_of_house: "#8a8a8a",
-  entrance: "#4c9a6a",
+  seating: "#e9a23b",
+  service: "#e0531c",
+  back_of_house: "#6a665e",
+  front_of_house: "#9a958b",
+  entrance: "#0f766e",
 };
 
 function bounds(layout: Layout, rooms?: Room[]) {
@@ -74,7 +74,7 @@ export function FloorPlan({ layout, rooms }: { layout: Layout; rooms?: Room[] })
             y1={o.a[1]}
             x2={o.b[0]}
             y2={o.b[1]}
-            stroke={o.kind === "door" ? "#4c9a6a" : "#5aa6d6"}
+            stroke={o.kind === "door" ? "#0f766e" : "#5aa6d6"}
             strokeWidth={0.2}
           />
         )),
@@ -111,7 +111,7 @@ export function FloorPlan({ layout, rooms }: { layout: Layout; rooms?: Room[] })
       ))}
       {layout.entrance_xz && (
         <g transform={`translate(${layout.entrance_xz[0]} ${layout.entrance_xz[1]})`}>
-          <circle r={0.22} fill="#4c9a6a" />
+          <circle r={0.22} fill="#0f766e" />
           <text y={0.75} textAnchor="middle" fontSize={0.3} fill="var(--foreground)">
             entrance
           </text>

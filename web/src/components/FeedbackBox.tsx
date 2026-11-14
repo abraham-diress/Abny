@@ -43,7 +43,7 @@ export function FeedbackBox({
       }}
       className="space-y-2"
     >
-      <label htmlFor="feedback" className="text-sm font-medium">
+      <label htmlFor="feedback" className="block text-sm font-semibold">
         Not quite right? Tell the agent.
       </label>
       <div className="flex flex-wrap gap-1.5">
@@ -52,7 +52,7 @@ export function FeedbackBox({
             key={s}
             type="button"
             onClick={() => setText((t) => (t ? `${t}, ${s.toLowerCase()}` : s))}
-            className="rounded-full border border-border bg-surface px-2.5 py-1 text-xs text-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-accent"
+            className="rounded-full border border-border bg-surface px-2.5 py-1 text-xs text-muted transition-colors hover:border-border-strong hover:text-foreground focus-visible:outline-2 focus-visible:outline-accent"
           >
             {s}
           </button>
@@ -65,7 +65,7 @@ export function FeedbackBox({
         rows={2}
         disabled={disabled || busy}
         placeholder="e.g. fewer seats, closer to transit"
-        className="w-full resize-none rounded-lg border border-border bg-background p-2 text-sm outline-none focus:border-accent focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-60"
+        className="w-full resize-none rounded-lg border border-border bg-surface-2/50 p-2.5 text-sm outline-none focus:border-accent focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-60"
       />
       {error && (
         <p role="alert" className="text-sm text-bad">
@@ -76,7 +76,7 @@ export function FeedbackBox({
         <button
           type="submit"
           disabled={disabled || busy || !text.trim()}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-background hover:opacity-90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-50"
+          className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-on-primary transition-colors hover:bg-primary-strong focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-50"
         >
           {busy ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />} Re-plan
         </button>

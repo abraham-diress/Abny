@@ -38,7 +38,7 @@ function TourFallback({ layout, rooms, reason }: { layout: Layout | null; rooms?
       type="button"
       onClick={() => setView(v)}
       aria-pressed={view === v}
-      className={clsx("rounded-md px-2 py-1", view === v ? "bg-accent-soft text-accent" : "text-muted hover:text-foreground")}
+      className={clsx("rounded-md px-2 py-1", view === v ? "bg-primary-soft font-medium text-primary" : "text-muted hover:text-foreground")}
     >
       {label}
     </button>
@@ -313,7 +313,7 @@ export function SpaceTour({ space, layout, rooms }: { space: Space; layout: Layo
                 const [cx, cz] = centroid(r.polygon_m);
                 void jumpTo(cx, cz, r.polygon_m);
               }}
-              className={clsx("inline-flex items-center gap-1 rounded-full border border-border px-2.5 py-1 hover:border-muted")}
+              className={clsx("inline-flex items-center gap-1 rounded-full border border-border px-2.5 py-1 transition-colors hover:border-border-strong hover:text-foreground")}
             >
               <MapPin className="size-3" /> {r.label ?? r.room_type ?? r.room_id}
             </button>

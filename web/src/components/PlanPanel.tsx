@@ -17,7 +17,7 @@ function Funnel({ funnel }: { funnel: FunnelStats }) {
   const max = Math.max(funnel.total, 1);
   return (
     <section aria-label="Search funnel" className="space-y-2">
-      <h3 className="text-xs font-semibold tracking-wide text-muted uppercase">Funnel</h3>
+      <h3 className="text-[11px] font-semibold tracking-[0.1em] text-muted uppercase">Funnel</h3>
       <ul className="space-y-1.5">
         {STAGES.map(({ key, label }) => {
           const n = funnel[key];
@@ -27,7 +27,7 @@ function Funnel({ funnel }: { funnel: FunnelStats }) {
             <li key={key} className="grid grid-cols-[5.5rem_1fr_2.5rem] items-center gap-2 text-sm">
               <span className="text-muted">{label}</span>
               <span className="h-2 overflow-hidden rounded-full bg-surface-2">
-                <span className="block h-full rounded-full bg-accent transition-[width] duration-500" style={{ width: `${width}%` }} />
+                <span className="block h-full rounded-full bg-gradient-to-r from-primary to-tertiary transition-[width] duration-500" style={{ width: `${width}%` }} />
               </span>
               <span className="text-right font-mono tabular-nums">{n || "–"}</span>
             </li>
@@ -41,7 +41,7 @@ function Funnel({ funnel }: { funnel: FunnelStats }) {
 function Todos({ todos }: { todos: RunView["todos"] }) {
   return (
     <section aria-label="Agent plan" className="space-y-2">
-      <h3 className="text-xs font-semibold tracking-wide text-muted uppercase">Plan</h3>
+      <h3 className="text-[11px] font-semibold tracking-[0.1em] text-muted uppercase">Plan</h3>
       {todos.length === 0 ? (
         <p className="text-sm text-muted">Waiting for the agent to plan…</p>
       ) : (
@@ -70,7 +70,7 @@ function Agents({ agents }: { agents: AgentInfo[] }) {
   if (agents.length === 0) return null;
   return (
     <section aria-label="Subagents" className="space-y-2">
-      <h3 className="text-xs font-semibold tracking-wide text-muted uppercase">Subagents</h3>
+      <h3 className="text-[11px] font-semibold tracking-[0.1em] text-muted uppercase">Subagents</h3>
       <ul className="space-y-1.5">
         {agents.map((a) => (
           <li key={a.name} className="flex items-start gap-2 text-sm">
@@ -101,11 +101,11 @@ const ICONS: Record<ActivityItem["kind"], React.ReactNode> = {
 function Activity({ items }: { items: ActivityItem[] }) {
   return (
     <section aria-label="Recent activity" className="min-h-0 space-y-2">
-      <h3 className="text-xs font-semibold tracking-wide text-muted uppercase">Activity</h3>
+      <h3 className="text-[11px] font-semibold tracking-[0.1em] text-muted uppercase">Activity</h3>
       {items.length === 0 ? (
         <p className="text-sm text-muted">Nothing yet.</p>
       ) : (
-        <ul className="max-h-64 space-y-1 overflow-y-auto pr-1 font-mono text-xs">
+        <ul className="max-h-64 space-y-1 overflow-y-auto rounded-lg bg-surface-2/60 p-2 font-mono text-[11px] leading-relaxed">
           {items.slice(0, 30).map((a) => (
             <li
               key={a.seq}

@@ -331,7 +331,7 @@ export function G2Tester() {
             <label htmlFor="rot" className="text-xs font-semibold tracking-wide text-muted uppercase">
               Rotation {rotation}°
             </label>
-            <input id="rot" type="range" min={0} max={359} step={1} value={rotation} onChange={(e) => setRotation(Number(e.target.value))} className="w-full accent-[var(--accent)]" />
+            <input id="rot" type="range" min={0} max={359} step={1} value={rotation} onChange={(e) => setRotation(Number(e.target.value))} className="w-full accent-[var(--primary)]" />
           </div>
           <div className="flex flex-wrap gap-2">
             <button
@@ -341,7 +341,7 @@ export function G2Tester() {
               aria-pressed={placing}
               className={clsx(
                 "inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium disabled:opacity-50",
-                placing ? "bg-accent text-background" : "border border-border hover:border-muted",
+                placing ? "bg-primary text-on-primary" : "border border-border hover:border-muted",
               )}
             >
               <Crosshair className="size-4" /> {placing ? "Placing… (Esc)" : "Place on floor"}

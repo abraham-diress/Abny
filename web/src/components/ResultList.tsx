@@ -15,12 +15,12 @@ function Card({ r, selected, onSelect }: { r: CandidateResult; selected: boolean
         onClick={onSelect}
         aria-current={selected}
         className={clsx(
-          "w-full rounded-xl border p-3 text-left transition-colors focus-visible:outline-2 focus-visible:outline-accent",
-          selected ? "border-accent bg-accent-soft" : "border-border bg-surface hover:border-muted",
+          "w-full rounded-xl border p-3 text-left transition-all focus-visible:outline-2 focus-visible:outline-primary",
+          selected ? "border-primary/50 bg-primary-soft shadow-sm" : "border-border bg-surface hover:border-border-strong hover:bg-surface-2/50",
         )}
       >
         <div className="flex items-start gap-3">
-          <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-accent font-semibold text-background tabular-nums">
+          <span className={clsx("flex size-7 shrink-0 items-center justify-center rounded-lg text-sm font-semibold tabular-nums", selected ? "bg-primary text-on-primary" : "bg-surface-2 text-foreground")}>
             {r.rank}
           </span>
           <div className="min-w-0 flex-1 space-y-1">
@@ -29,10 +29,10 @@ function Card({ r, selected, onSelect }: { r: CandidateResult; selected: boolean
               {usd(r.space.asking_rent_month)}/mo · {r.space.sqft ? `${r.space.sqft.toLocaleString()} sqft` : "size n/a"}
               {r.layout ? ` · ${r.layout.seat_count} ${seatWord(isOffice(r), r.layout.seat_count)}` : ""}
             </p>
-            {r.rank_reasons[0] && <p className="text-sm text-pretty">{r.rank_reasons[0]}</p>}
+            {r.rank_reasons[0] && <p className="text-[13px] text-pretty text-foreground/80">{r.rank_reasons[0]}</p>}
           </div>
           <div className="flex shrink-0 flex-col items-end gap-1">
-            <span className="font-mono text-sm tabular-nums">{Math.round(r.rank_score * 100)}</span>
+            <span className="rounded-md bg-surface-2 px-1.5 py-0.5 font-mono text-xs tabular-nums" title="Match score">{Math.round(r.rank_score * 100)}</span>
             {valid != null &&
               (valid ? (
                 <ShieldCheck className="size-4 text-good" aria-label="Layout valid" />
@@ -59,7 +59,7 @@ export function ResultList({
 }) {
   if (results.length === 0) {
     return (
-      <p className="rounded-xl border border-dashed border-border p-4 text-sm text-muted">
+      <p className="rounded-xl border border-dashed border-border p-4 text-sm text-pretty text-muted">
         {running ? "Candidates appear here as the agent finishes fitting them out." : "No results."}
       </p>
     );

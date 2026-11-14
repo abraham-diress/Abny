@@ -26,7 +26,7 @@ export function BriefChips({ brief }: { brief: Brief }) {
   return (
     <ul className="flex flex-wrap gap-1.5" aria-label="Searching for">
       {conditionsOf(brief).map((c) => (
-        <li key={c} className="rounded-full border border-border bg-surface px-2 py-0.5 text-xs text-muted">
+        <li key={c} className="rounded-full border border-border bg-surface px-2.5 py-0.5 text-xs whitespace-nowrap text-foreground/80">
           {c}
         </li>
       ))}
@@ -99,7 +99,7 @@ export function EmptyResults({ brief, funnel }: { brief: Brief | null; funnel: F
                 type="button"
                 disabled={busy !== null}
                 onClick={() => void retry(r)}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-accent/50 bg-accent-soft px-3 py-1.5 text-sm text-accent hover:border-accent focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-primary/40 bg-primary-soft px-3 py-1.5 text-sm font-medium text-primary hover:border-primary focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50"
               >
                 {busy === r.label && <Loader2 className="size-4 animate-spin" />}
                 {r.label}

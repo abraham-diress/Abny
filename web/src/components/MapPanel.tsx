@@ -12,10 +12,10 @@ import type { CandidateResult, POI } from "@/types/schemas";
 const OFFLINE_STYLE: StyleSpecification = {
   version: 8,
   sources: {},
-  layers: [{ id: "bg", type: "background", paint: { "background-color": "#e7e2d8" } }],
+  layers: [{ id: "bg", type: "background", paint: { "background-color": "#ebe8e1" } }],
 };
 
-const POI_COLORS: Record<string, string> = { competitor: "#dc2626", amenity: "#16a34a", transit: "#2563eb" };
+const POI_COLORS: Record<string, string> = { competitor: "#c0262d", amenity: "#0f766e", transit: "#2563eb" };
 
 async function styleReachable(url: string): Promise<boolean> {
   if (!url || url === "offline") return false;
@@ -30,9 +30,15 @@ async function styleReachable(url: string): Promise<boolean> {
   }
 }
 
+/** The default OpenFreeMap style has a dark sibling; a custom MAP_STYLE is used as-is in both themes. */
+function themedStyle(url: string): string {
+  const dark = typeof document !== "undefined" && document.documentElement.getAttribute("data-theme") === "dark";
+  return dark && /\/styles\/liberty$/.test(url) ? url.replace(/liberty$/, "dark") : url;
+}
+
 function rankColor(rank: number): string {
   // Rank 1 strongest, fading down the list.
-  return ["#b45309", "#d97706", "#f59e0b", "#fbbf24", "#fcd34d"][Math.min(rank - 1, 4)] ?? "#fcd34d";
+  return ["#e0531c", "#ea6a2e", "#ef8540", "#f29f4f", "#f5b963"][Math.min(rank - 1, 4)] ?? "#f5b963";
 }
 
 function candidateEl(r: CandidateResult, selected: boolean, onClick: () => void): HTMLElement {
@@ -47,10 +53,10 @@ function candidateEl(r: CandidateResult, selected: boolean, onClick: () => void)
     height: `${size}px`,
     borderRadius: "9999px",
     background: rankColor(r.rank),
-    color: "#1f1b16",
+    color: r.rank <= 3 ? "#ffffff" : "#1a0c05",
     fontWeight: "700",
     fontSize: selected ? "15px" : "12px",
-    border: selected ? "3px solid #1f1b16" : "2px solid #fff",
+    border: selected ? "3px solid #17150f" : "2px solid #fff",
     boxShadow: "0 1px 4px rgba(0,0,0,.4)",
     cursor: "pointer",
     zIndex: selected ? "2" : "1",
@@ -107,6 +113,7 @@ export function MapPanel({
   // Create the map once (maplibre touches `window`, so it's loaded on the client only).
   useEffect(() => {
     let cancelled = false;
+    let themeObserver: MutationObserver | null = null;
     (async () => {
       const [lib, online] = await Promise.all([import("maplibre-gl"), styleReachable(MAP_STYLE)]);
       if (cancelled || !containerRef.current) return;
@@ -115,7 +122,7 @@ export function MapPanel({
       lib.setWorkerUrl("/maplibre-gl-worker.mjs");
       const map = new lib.Map({
         container: containerRef.current,
-        style: online ? MAP_STYLE : OFFLINE_STYLE,
+        style: online ? themedStyle(MAP_STYLE) : OFFLINE_STYLE,
         center: [-95.39, 29.75],
         zoom: 11,
         attributionControl: { compact: true },
@@ -126,9 +133,22 @@ export function MapPanel({
       if (process.env.NODE_ENV !== "production") (window as unknown as { __hestiaMap?: MapT }).__hestiaMap = map;
       mapRef.current = map;
       setOffline(!online);
+      // Swap the basemap when the theme toggles (markers are DOM elements, so they survive setStyle).
+      if (online) {
+        let current = themedStyle(MAP_STYLE);
+        themeObserver = new MutationObserver(() => {
+          const next = themedStyle(MAP_STYLE);
+          if (next !== current) {
+            current = next;
+            map.setStyle(next);
+          }
+        });
+        themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+      }
     })();
     return () => {
       cancelled = true;
+      themeObserver?.disconnect();
       markersRef.current.forEach((m) => m.remove());
       markersRef.current = [];
       mapRef.current?.remove();
@@ -189,11 +209,11 @@ export function MapPanel({
   const aerial = n?.aerial_ortho_path;
 
   return (
-    <div className="relative h-72 overflow-hidden rounded-xl border border-border bg-surface-2">
+    <div className="relative h-72 overflow-hidden rounded-xl border border-border bg-surface-2 sm:h-80">
       {/* Explicit size: maplibre's CSS makes the container position:relative, so inset-0 wouldn't size it. */}
       <div ref={containerRef} className="h-full w-full" aria-label="Map of candidate spaces" role="region" />
 
-      <div className="pointer-events-none absolute top-2 left-2 space-y-1 rounded-lg bg-white/90 px-2 py-1.5 text-[11px] text-neutral-800 shadow">
+      <div className="pointer-events-none absolute top-2 left-2 space-y-1 rounded-lg border border-border bg-surface/90 px-2.5 py-2 text-[11px] text-foreground shadow-sm backdrop-blur">
         <p className="flex items-center gap-1.5">
           <span className="inline-block size-3 rounded-full border-2 border-white" style={{ background: rankColor(1) }} /> Candidates (by rank)
         </p>
@@ -208,21 +228,21 @@ export function MapPanel({
             </p>
           </>
         )}
-        {offline && <p className="text-neutral-500">Offline: no street map</p>}
+        {offline && <p className="text-muted">Offline: no street map</p>}
       </div>
 
       {aerial && (
-        <figure className="absolute bottom-2 left-2 w-36 overflow-hidden rounded-lg border border-white/70 bg-white shadow">
+        <figure className="absolute bottom-2 left-2 w-36 overflow-hidden rounded-lg border border-border bg-surface shadow-sm">
           {/* eslint-disable-next-line @next/next/no-img-element -- served by the API, not optimized by Next */}
           <img src={assetUrl(aerial)} alt={`Aerial view of ${selected?.space.address}`} className="aspect-[4/3] w-full object-cover" />
-          <figcaption className="px-1.5 py-1 text-[10px] text-neutral-700">
+          <figcaption className="px-1.5 py-1 text-[10px] text-muted">
             Aerial{n?.parking_score != null ? ` · parking ${pct(n.parking_score)}` : ""}
           </figcaption>
         </figure>
       )}
 
       {results.length === 0 && (
-        <p className="pointer-events-none absolute inset-x-0 bottom-3 text-center text-xs text-neutral-600">Candidates appear here as they&apos;re found.</p>
+        <p className="pointer-events-none absolute inset-x-0 bottom-3 text-center text-xs text-muted">Candidates appear here as they&apos;re found.</p>
       )}
     </div>
   );
