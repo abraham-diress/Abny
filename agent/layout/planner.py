@@ -452,6 +452,7 @@ def _plan_one(space_id: str, site: Site, rooms: list[Room], catalog, tpl: Busine
             placer.remove(placer.items()[-1].item_id)
             break
 
+    _furnish_other_rooms(placer, site, catalog, tpl, wanted, blocked, notes)
     layout = _layout(placer, space_id, layout_id, tpl, site, strategy, notes)
 
     # Repair: drop seating the validator can't reach; if equipment is boxed in, drop the seat nearest it.
@@ -579,8 +580,8 @@ def _wall_slots(site: Site, region, span: float, prefer: str):
                     key = -d_ent
                 elif prefer == "near_entrance":
                     key = d_ent
-                elif prefer == "side_near_entrance":  # side walls first, then closest to the door
-                    key = parallel_to_entrance * 100 + d_ent
+                elif prefer == "side_near_entrance":  # closest to the door; a side wall is worth ~3 m
+                    key = d_ent + parallel_to_entrance * 3
                 else:  # side walls first, then closer to the back
                     key = parallel_to_entrance * 100 - d_ent
                 cands.append((key, x, z, t, n))
@@ -689,6 +690,72 @@ def _place_seating(placer: Placer, site: Site, catalog, tpl: BusinessTemplate, r
         grid(allow_over=False, kinds=types + [t for t in tpl.seating_wall if t in catalog and t not in types])
         grid(allow_over=True, kinds=types)
     return seats
+
+
+SKIP_ROOM_WORDS = ("bath", "restroom", "toilet", "wc", "stair", "elevator", "hall", "corridor", "lobby", "vestibule", "entry")
+
+
+def _furnish_other_rooms(placer: Placer, site: Site, catalog, tpl: BusinessTemplate, wanted: int, blocked, notes: list[str]) -> None:
+    """Give the rooms the main plan left empty a use, so the tour doesn't show a row of bare rooms.
+    Offices: private offices take desks while the request isn't met, then bigger rooms become a second
+    meeting room, medium ones a lounge, closets storage. Bakeries/cafés: spare back rooms become dry
+    storage (no extra seats: bakery seats are customer seats). Every piece is kept only if everything
+    stays reachable."""
+    used = {i.room_id for i in placer.items()}
+    rooms = []
+    for r in site.floor_rooms:
+        text = f"{r.room_type or ''} {r.label or ''}".lower()
+        if r.room_id in used or is_void(r) or any(w in text for w in SKIP_ROOM_WORDS):
+            continue
+        poly = room_polygon(r)
+        if poly.area >= 2.5:
+            rooms.append((poly.area, r, poly, "closet" in text))
+    rooms.sort(key=lambda x: -x[0])
+    if not rooms:
+        return
+
+    def keep(add) -> bool:
+        before = blocked()
+        n = len(placer.items())
+        if not add() or len(placer.items()) == n:
+            return False
+        if blocked() - before:
+            placer.remove(placer.items()[-1].item_id)
+            return False
+        return True
+
+    def seats() -> int:
+        return sum(i.seats for i in placer.items())
+
+    office = tpl.business_type == "office"
+    furnished = []
+    lounges = 0
+    for area, room, poly, closet in rooms:
+        name = (room.label or room.room_type or "").strip()
+        label = name if name and name.lower() not in ("other", "unknown", "room") else f"{area:.0f} m² room"
+        if office and not closet and seats() < wanted and "single_desk" in catalog and area >= 6:
+            added = 0
+            while added < min(4, int(area // 6)) and seats() < wanted and keep(
+                    lambda: _place_on_walls(placer, site, catalog, "single_desk", poly, prefer="far_from_entrance", avoid_windows=False)):
+                added += 1
+            if added:
+                furnished.append(f"{label}: {added} desk{'s' if added > 1 else ''}")
+                continue
+        if office and not closet and area >= 12 and "meeting_table" in catalog and keep(lambda: _place_free(placer, site, catalog, "meeting_table", poly)):
+            furnished.append(f"{label}: meeting room")
+        elif office and not closet and area >= 6 and lounges == 0 and "sofa" in catalog and keep(
+                lambda: _place_on_walls(placer, site, catalog, "sofa", poly, prefer="far_from_entrance")):
+            lounges += 1
+            furnished.append(f"{label}: lounge")
+        elif office and not closet and area >= 4 and "phone_booth" in catalog and len(furnished) % 2 == 0 and keep(
+                lambda: _place_on_walls(placer, site, catalog, "phone_booth", poly, prefer="far_from_entrance")):
+            furnished.append(f"{label}: focus room")
+        else:
+            store = "storage_cabinet" if office else "retail_shelf"
+            if store in catalog and keep(lambda: _place_on_walls(placer, site, catalog, store, poly, prefer="far_from_entrance")):
+                furnished.append(f"{label}: storage")
+    if furnished:
+        notes.append("Other rooms: " + "; ".join(furnished) + ".")
 
 
 def _place_free(placer: Placer, site: Site, catalog, item_type: str, region) -> bool:

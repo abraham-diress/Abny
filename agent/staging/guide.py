@@ -15,7 +15,7 @@ import re
 import cv2
 import numpy as np
 
-from agent.layout.geometry import item_footprint, room_polygon
+from agent.layout.geometry import is_void, item_footprint, room_polygon
 from agent.staging.camera import PanoCamera, box_corners
 from agent.staging.files import ensure_dirs, mask_url_for, to_path, to_url
 from shared.conventions import GUIDES_DIR
@@ -144,10 +144,19 @@ def render_floorplan(layout: Layout, rooms: list[Room], px_per_m: int = 60) -> s
     def P(x: float, z: float) -> tuple[int, int]:
         return int((x - x0) * px_per_m), int((z - z0) * px_per_m)
 
-    for p in polys:
+    used = {i.room_id for i in layout.items}
+    labels = []
+    for r, p in zip(rooms, polys):
         pts = np.array([P(x, z) for x, z in p.exterior.coords], np.int32)
-        cv2.fillPoly(img, [pts], (236, 236, 236))
+        void = is_void(r)
+        # Rooms the plan uses are gray; unused rooms (restrooms, halls, spare rooms) stay pale and labeled.
+        cv2.fillPoly(img, [pts], (205, 205, 205) if void else (236, 236, 236) if r.room_id in used else (247, 246, 243))
         cv2.polylines(img, [pts], True, (60, 60, 60), 3)
+        if r.room_id not in used and p.area >= 2.0:
+            name = (r.label or r.room_type or "").strip()
+            name = "void" if void else (name if name and name.lower() not in ("other", "unknown") else "unused")
+            c = p.representative_point()
+            labels.append((name.lower(), P(c.x, c.y)))
     for r in rooms:
         for o in r.openings:
             color = {"door": (60, 60, 220), "window": (220, 170, 60)}.get(o.kind, (160, 160, 160))
@@ -167,6 +176,9 @@ def render_floorplan(layout: Layout, rooms: list[Room], px_per_m: int = 60) -> s
         cv2.circle(img, P(*layout.entrance_xz), 10, (60, 60, 220), -1)
     # Plans are drawn with +z down the image; flip so the entrance usually sits at the bottom.
     img = cv2.flip(img, 0)
+    for text, (lx, ly) in labels:
+        (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+        cv2.putText(img, text, (lx - tw // 2, H - 1 - ly + th // 2), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (150, 150, 150), 1, cv2.LINE_AA)
     unit = "desks" if layout.business_type == "office" else "seats"
     label = f"{layout.business_type} | {layout.seat_count} {unit} | {layout.strategy or ''}"
     cv2.putText(img, label, (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (40, 40, 40), 2, cv2.LINE_AA)
