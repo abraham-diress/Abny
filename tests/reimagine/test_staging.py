@@ -132,3 +132,19 @@ def test_nova_fit_size():
     out = nova.fit_size(np.zeros((1500, 2000, 3), np.uint8))
     h, w = out.shape[:2]
     assert max(h, w) <= 1024 and h % 64 == 0 and w % 64 == 0 and min(h, w) >= 320
+
+
+def test_floor_height_ignores_unset_room_floor(single_room, bakery_brief, pano_file, monkeypatch):
+    import sys
+    import types
+
+    from agent.staging import guide
+
+    layout = plan_layout("S1", single_room, None, bakery_brief)
+    fake = types.ModuleType("pipeline.queries")
+    fake.get_rooms = lambda space_id: single_room  # floor_y_m left at the default 0.0
+    monkeypatch.setitem(sys.modules, "pipeline", types.ModuleType("pipeline"))
+    monkeypatch.setitem(sys.modules, "pipeline.queries", fake)
+    high_cam = _pano(pano_file).model_copy(update={"position_m": (4.5, 11.55, 11.0)})  # floor really at y = 10
+    assert guide._floor_y(layout, high_cam) == pytest.approx(10.0)
+    assert guide._floor_y(layout, _pano(pano_file)) == pytest.approx(0.0)  # consistent data is trusted

@@ -73,7 +73,8 @@ def plan_layout(
     candidates: list[Layout] = []
     for strat in tried:
         layout = _plan_one(space_id, site, rooms, catalog, tpl, wanted, strat)
-        layout.notes = tpl_notes + site.notes + _inspection_notes(inspection, site) + layout.notes
+        notes = tpl_notes + site.notes + _inspection_notes(inspection, site) + layout.notes
+        layout.notes = [n for n in notes if n.startswith("WARNING")] + [n for n in notes if not n.startswith("WARNING")]
         candidates.append(layout)
 
     def score(lay: Layout) -> tuple:
@@ -182,6 +183,10 @@ def analyze_site(rooms: list[Room]) -> Site:
             notes.append("Doorway to the back room not marked in the scan; assumed one where the rooms meet.")
 
     windows = [LineString([o.a, o.b]) for r in floor_rooms for o in r.openings if o.kind == "window"]
+    overlap = rooms_overlap(floor_rooms)
+    if overlap:
+        notes.insert(0, f"WARNING: rooms {overlap[0]} and {overlap[1]} overlap in the data (room positions may be missing); "
+                        "furniture may not line up with the 3D tour.")
     return Site(
         floor_rooms=floor_rooms,
         front=front,
@@ -193,6 +198,18 @@ def analyze_site(rooms: list[Room]) -> Site:
         windows=windows,
         notes=notes,
     )
+
+
+def rooms_overlap(rooms: list[Room], threshold: float = 0.2) -> tuple[str, str] | None:
+    """First pair of rooms whose overlap is more than `threshold` of the smaller room, else None."""
+    polys = [(r.room_id, room_polygon(r)) for r in rooms]
+    for i in range(len(polys)):
+        for j in range(i + 1, len(polys)):
+            (ia, a), (ib, b) = polys[i], polys[j]
+            small = min(a.area, b.area)
+            if small > 0 and a.intersection(b).area > threshold * small:
+                return ia, ib
+    return None
 
 
 def _excluded(room: Room) -> bool:
@@ -640,5 +657,5 @@ def _short_hash(*parts) -> str:
     return hashlib.sha1("|".join(map(str, parts)).encode()).hexdigest()[:6].upper()
 
 
-__all__ = ["plan_layout", "analyze_site", "STRATEGIES"]
+__all__ = ["plan_layout", "analyze_site", "rooms_overlap", "STRATEGIES"]
 

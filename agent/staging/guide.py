@@ -149,17 +149,24 @@ def _draw_box_edges(img: np.ndarray, px: np.ndarray, color) -> None:
 
 
 def _floor_y(layout: Layout, pano: PanoRef) -> float:
-    """Floor height for the layout's rooms: from the data pipeline if available, else camera height."""
+    """Floor height for the layout's rooms: from the data pipeline if it looks real, else camera height.
+
+    A room floor left at the default 0.0 while the camera says otherwise (> 0.5 m apart) is treated
+    as "not set" and the camera estimate wins.
+    """
+    camera_floor = pano.position_m[1] - CAMERA_HEIGHT_M
     try:
         from pipeline.queries import get_rooms  # Natnael's module; optional at this point
 
         rooms = {r.room_id: r for r in get_rooms(layout.space_id)}
         ys = [rooms[i.room_id].floor_y_m for i in layout.items if i.room_id in rooms]
         if ys:
-            return float(np.median(ys))
+            y = float(np.median(ys))
+            if not (y == 0.0 and abs(camera_floor) > 0.5):
+                return y
     except Exception:  # noqa: BLE001 - fall back to the camera estimate
         pass
-    return pano.position_m[1] - CAMERA_HEIGHT_M
+    return camera_floor
 
 
 def _safe(s: str) -> str:

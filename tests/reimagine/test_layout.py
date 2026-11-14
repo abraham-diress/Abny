@@ -119,3 +119,22 @@ def test_validator_flags_wrong_seat_count(single_room, bakery_brief):
     lay = _base(single_room, bakery_brief)
     lay.seat_count += 3
     assert "other" in {v.kind for v in validate_layout(lay, single_room).violations}
+
+
+def test_overlapping_rooms_are_flagged(bakery_brief):
+    from agent.layout.planner import rooms_overlap
+    from shared.schemas import Room
+
+    stacked = [
+        Room(room_id="F", space_id="X", polygon_m=[(0, 0), (8, 0), (8, 7), (0, 7)], area_m2=56),
+        Room(room_id="K", space_id="X", polygon_m=[(0, 0), (8, 0), (8, 4), (0, 4)], area_m2=32),
+    ]
+    assert rooms_overlap(stacked) == ("F", "K")
+    layout = plan_layout("X", stacked, None, bakery_brief)
+    assert layout.notes[0].startswith("WARNING: rooms F and K overlap")
+
+
+def test_touching_rooms_are_not_flagged(front_and_kitchen):
+    from agent.layout.planner import rooms_overlap
+
+    assert rooms_overlap(front_and_kitchen) is None
