@@ -359,6 +359,14 @@ The frontend does no AI: it places your GLBs exactly where your `Layout` says. *
 
 **Definition of done:** every layout the demo shows passes the validator, and every hero image shown passed the scorer.
 
+**Using the Reimaginer** (for Abraham and Biniyam):
+- `from agent.layout.planner import plan_layout` / `from agent.layout.validator import validate_layout`: deterministic, ~0.2 s, no API keys. The planner tries a back counter and a side counter and keeps the better one; `Layout.notes` says what it couldn't fit.
+- `from agent.staging.generate import render_hero`: needs `get_panoramas` from `pipeline.queries` and Bedrock access. `HERO_MODE=preview` returns the guide image with no AI (use it for UI work).
+- `from agent.staging.guide import render_floorplan`: top-down plan PNG of any layout (`media/guides/<layout_id>_plan.png`), a good fallback view.
+- `from agent.layout.catalog import catalog_list`: what `GET /api/catalog` returns. Models are in `assets/glb/`: meters, origin at the floor center, front faces +z. Rebuild with `python assets/build_assets.py`.
+- Evals: `python eval/layout_eval.py` (200 synthetic floor plans: 100% valid, 91.5% fit every requested seat, median 0.17 s), `python eval/image_eval.py`, gate G3: `python eval/g3_image_test.py --images ...`.
+- Tests: `pytest tests/reimagine -q`.
+
 ---
 
 ## 10. Git workflow
