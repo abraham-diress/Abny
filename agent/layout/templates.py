@@ -12,7 +12,7 @@ desks are the "seats", and the kitchenette and storage are back of house.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from shared.schemas import Brief, BusinessType
 
@@ -35,6 +35,18 @@ class BusinessTemplate:
     anchor_items: tuple[str, ...] = ()  # free-standing, placed before seating (back room first)
     strategies: tuple[str, ...] = ("back-counter", "side-counter")
     seat_word: str = "seats"  # what seat_count counts, for notes ("desks" for offices)
+    # Dressing: pieces that make a big floor look lived in. They add no seats and are placed last,
+    # each kept only if everyone can still reach everything (see planner._dress).
+    #   (item_type, m2 of floor per piece, max pieces, "wall" | "free", group): the count grows with the floor.
+    #   group "social" pieces gather around the biggest empty patch, "work" pieces sit near the desks,
+    #   "" pieces go wherever the floor is emptiest.
+    dress_program: tuple[tuple[str, float, int, str, str], ...] = ()
+    dress_fill_large: tuple[str, ...] = ()  # then fill the biggest empty patches with these (a big void)
+    dress_fill_small: tuple[str, ...] = ()  # ...or these (a smaller void)
+    dress_target_empty: float = 0.12  # stop filling when this share of the floor is still empty
+    dress_fill_cap: float = 0.30  # never dress a floor that is already this full of furniture
+    dress_whole_floor: bool = False  # offices dress every room; shops only the front room
+    dress_rugs: tuple[tuple[str, str, float], ...] = ()  # (piece, rug under it, how far the rug sits toward the piece's front, m)
 
 
 BAKERY = BusinessTemplate(
@@ -47,6 +59,8 @@ BAKERY = BusinessTemplate(
     foh_extras=("condiment_station",),
     default_seats=16,
     prompt_hint="artisan bakery with a glass pastry display case full of bread and pastries, service counter, café tables",
+    dress_program=(("plant_large", 40, 4, "wall", ""),),
+    dress_fill_cap=0.35,
 )
 
 CAFE = BusinessTemplate(
@@ -60,6 +74,8 @@ CAFE = BusinessTemplate(
     foh_extras=("condiment_station",),
     default_seats=24,
     prompt_hint="specialty coffee shop with an espresso bar, pastry case and café seating",
+    dress_program=(("plant_large", 40, 4, "wall", ""), ("floor_lamp", 60, 2, "wall", "")),
+    dress_fill_cap=0.35,
 )
 
 RETAIL = BusinessTemplate(
@@ -88,11 +104,60 @@ OFFICE = BusinessTemplate(
     seat_word="desks",
     prompt_hint=("bright modern open-plan office with white desk pods, black task chairs and monitors, "
                  "a wooden meeting table, a reception desk and a few plants"),
+    # A 25-desk team in a 460 m2 floor still has 300 m2 to live in: lounges, huddle tables, a coffee bar,
+    # shelves, whiteboards and plants, in the quantities a floor that size would really have.
+    dress_program=(
+        ("coffee_bar", 100, 1, "wall", "social"),
+        ("lounge_set", 150, 3, "wall", "social"),
+        ("huddle_table", 80, 4, "free", "social"),
+        # Recreation, only on a floor big enough to spare the room (one per 200 / 300 / 450 m2 of floor):
+        ("foosball_table", 200, 1, "free", "social"),
+        ("table_tennis", 300, 2, "free", "social"),
+        ("fish_pond", 450, 1, "free", "social"),
+        ("printer_station", 120, 1, "wall", "work"),
+        ("whiteboard", 90, 3, "wall", "work"),
+        ("bookshelf", 70, 4, "wall", "work"),
+        ("planter_divider", 110, 3, "free", "social"),
+        ("floor_lamp", 90, 4, "wall", ""),
+        ("plant_large", 45, 8, "wall", "")
+    ),
+    dress_fill_large=("huddle_table", "lounge_set"),
+    dress_fill_small=("plant_large",),
+    dress_whole_floor=True,
+    dress_rugs=(("lounge_set", "rug_lounge", 0.55), ("huddle_table", "rug_huddle", 0.0), ("meeting_table", "rug_meeting", 0.0)),
 )
 
 TEMPLATES: dict[str, BusinessTemplate] = {"bakery": BAKERY, "cafe": CAFE, "retail": RETAIL, "office": OFFICE}
 
 _TWO_OVENS = re.compile(r"\b(two|2|double)\s+(deck\s+)?ovens?\b", re.I)
+
+
+M2_PER_DESK = 9.0  # gross floor per desk: the desk, its aisles and its share of meeting, lounge and support space
+
+
+def desk_capacity(area_m2: float) -> int:
+    """About how many desks a floor of this size seats comfortably."""
+    return int(area_m2 // M2_PER_DESK)
+
+
+def _clamp(x: float, lo: int, hi: int) -> int:
+    return max(lo, min(hi, round(x)))
+
+
+def scale_to_room(tpl: BusinessTemplate, area_m2: float) -> BusinessTemplate:
+    """Decide the pieces that belong to the *room*, not to the headcount, from the floor area first:
+    meeting tables, phone booths, kitchenettes and storage. (The desks still follow the brief; the
+    amenities in `dress_program` also scale with the floor.) A 140 m2 floor and a 460 m2 floor get
+    different counts for the same 25 desks."""
+    if tpl.business_type != "office":
+        return tpl
+    return replace(
+        tpl,
+        anchor_items=("meeting_table",) * _clamp(area_m2 / 160, 1, 4),
+        boh_required=("kitchenette_counter",) * _clamp(area_m2 / 260, 1, 3),
+        boh_optional=("storage_cabinet",) * _clamp(area_m2 / 110, 2, 8),
+        foh_extras=("sofa",) + ("phone_booth",) * _clamp(area_m2 / 90, 1, 6),
+    )
 
 
 def template_for(brief: Brief) -> tuple[BusinessTemplate, list[str]]:

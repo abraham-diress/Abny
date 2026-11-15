@@ -54,3 +54,6 @@ DEMO_RUN_FILE = os.getenv("DEMO_RUN_FILE", "")  # force one recording for every 
 # Business types to replay from a recording even when DEMO=0, e.g. DEMO_REPLAY=office:
 # the bakery runs live on stage while "click the office brief" replays (README demo script, step 5).
 DEMO_REPLAY = {t.strip() for t in os.getenv("DEMO_REPLAY", "").split(",") if t.strip()}
+# DEMO_REPLAN=1: a replay keeps the recorded search but plans every layout again with the current planner
+# (and drops the recorded photo, which shows the old layout). Use it until a fresh run with photos is recorded.
+DEMO_REPLAN = os.getenv("DEMO_REPLAN", "0").strip().lower() in {"1", "true", "yes"}

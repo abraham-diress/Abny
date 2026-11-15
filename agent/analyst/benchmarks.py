@@ -59,6 +59,8 @@ ITEM_COST: dict[str, tuple[float, float]] = {
     "chair": (80, 250),
     "stool": (60, 200),
 }
+ITEM_COST.setdefault("plant_large", (60, 300))   # dressing pieces in shops (not on the default price)
+ITEM_COST.setdefault("floor_lamp", (80, 400))
 DEFAULT_ITEM_COST = (300, 1_500)
 # Used when no layout yet: a starter equipment package.
 EQUIPMENT_PACKAGE: dict[str, tuple[float, float]] = {
@@ -119,6 +121,17 @@ OFFICE_ITEM_COST: dict[str, tuple[float, float]] = {
     "lounge_chair": (300, 1_200), "phone_booth": (4_000, 12_000), "storage": (300, 1_500),
     "storage_cabinet": (300, 1_500), "kitchenette_counter": (2_000, 8_000), "kitchenette": (2_000, 8_000),
     "whiteboard": (150, 800),
+    # Dressing pieces the layout planner adds on a big floor (see agent/layout/templates.py)
+    "lounge_set": (2_000, 7_000),       # sofa, two armchairs and a coffee table
+    "huddle_table": (1_200, 4_000),     # small table with four chairs
+    "coffee_bar": (1_500, 5_000),
+    "bookshelf": (200, 900),
+    "printer_station": (800, 3_500),    # cabinet and a commercial printer
+    "plant_large": (60, 300),
+    "planter_divider": (400, 1_500),
+    "floor_lamp": (80, 400),
+    "table_tennis": (500, 2_500), "fish_pond": (3_000, 15_000), "foosball_table": (300, 1_500),
+    "rug_lounge": (300, 1_200), "rug_huddle": (150, 600), "rug_meeting": (300, 1_500),
 }
 FURNITURE_PER_DESK = (1_200, 3_500)  # no layout yet: desk + chair + share of meeting, lounge and storage
 IT_PER_DESK = (300, 900)             # network cabling, Wi-Fi, share of AV

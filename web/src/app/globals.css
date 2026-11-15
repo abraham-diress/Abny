@@ -1,33 +1,104 @@
 @import "tailwindcss";
 
+/*
+ * Theme: `data-theme` on <html> ("light" | "dark"), set before paint by the script in layout.tsx
+ * (saved choice, else the system setting). `dark:` utilities follow it, not the media query.
+ */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+/*
+ * Brand palette
+ *   primary   = ember (the hearth): actions, rank, focus
+ *   secondary = teal: data, verified, "real" signals
+ *   tertiary  = saffron: highlights, the warm end of the rank scale
+ * Neutrals are warm stone so the orange never looks pasted on.
+ */
 :root {
-  --background: #faf7f2;
-  --foreground: #1f1b16;
+  --background: #fafaf8;
+  --foreground: #17150f;
   --surface: #ffffff;
-  --surface-2: #f3eee6;
-  --border: #e4dccf;
-  --muted: #6f655a;
-  --accent: #b45309;
-  --accent-soft: #fdf0dc;
+  --surface-2: #f3f2ee;
+  --surface-3: #e9e7e1;
+  --border: #e5e2db;
+  --border-strong: #d3cfc6;
+  --muted: #6a665e;
+
+  --primary: #e0531c;
+  --primary-strong: #c2410c;
+  --primary-soft: #fdeee6;
+  --on-primary: #ffffff;
+
+  --secondary: #0f766e;
+  --secondary-soft: #e3f4f1;
+  --on-secondary: #ffffff;
+
+  --tertiary: #e9a23b;
+  --tertiary-soft: #fcf3e2;
+
   --good: #15803d;
   --warn: #b45309;
-  --bad: #b91c1c;
+  --bad: #c0262d;
+
+  --ring: color-mix(in oklab, var(--primary) 55%, transparent);
+  --shadow-color: 30 20 10;
+  --grid-line: rgb(23 21 15 / 0.05);
+
+  color-scheme: light;
 }
 
+/* No-JS fallback: follow the system. */
 @media (prefers-color-scheme: dark) {
-  :root {
-    --background: #14110e;
-    --foreground: #f1ebe2;
-    --surface: #1d1914;
-    --surface-2: #26211b;
-    --border: #3a3329;
-    --muted: #a49a8c;
-    --accent: #f59e0b;
-    --accent-soft: #33260f;
+  :root:not([data-theme]) {
+    --background: #0d0c0b;
+    --foreground: #f3f1ec;
+    --surface: #161513;
+    --surface-2: #1d1c19;
+    --surface-3: #26241f;
+    --border: #2b2925;
+    --border-strong: #3a3732;
+    --muted: #a29d93;
+    --primary: #ff7440;
+    --primary-strong: #ff8a5c;
+    --primary-soft: #2f1a10;
+    --on-primary: #1a0c05;
+    --secondary: #2dd4bf;
+    --secondary-soft: #0e2a27;
+    --on-secondary: #04201c;
+    --tertiary: #f5b955;
+    --tertiary-soft: #2c2210;
     --good: #4ade80;
     --warn: #fbbf24;
     --bad: #f87171;
+    --shadow-color: 0 0 0;
+    --grid-line: rgb(243 241 236 / 0.05);
+    color-scheme: dark;
   }
+}
+
+[data-theme="dark"] {
+  --background: #0d0c0b;
+  --foreground: #f3f1ec;
+  --surface: #161513;
+  --surface-2: #1d1c19;
+  --surface-3: #26241f;
+  --border: #2b2925;
+  --border-strong: #3a3732;
+  --muted: #a29d93;
+  --primary: #ff7440;
+  --primary-strong: #ff8a5c;
+  --primary-soft: #2f1a10;
+  --on-primary: #1a0c05;
+  --secondary: #2dd4bf;
+  --secondary-soft: #0e2a27;
+  --on-secondary: #04201c;
+  --tertiary: #f5b955;
+  --tertiary-soft: #2c2210;
+  --good: #4ade80;
+  --warn: #fbbf24;
+  --bad: #f87171;
+  --shadow-color: 0 0 0;
+  --grid-line: rgb(243 241 236 / 0.05);
+  color-scheme: dark;
 }
 
 @theme inline {
@@ -35,21 +106,72 @@
   --color-foreground: var(--foreground);
   --color-surface: var(--surface);
   --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
   --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
   --color-muted: var(--muted);
-  --color-accent: var(--accent);
-  --color-accent-soft: var(--accent-soft);
+
+  --color-primary: var(--primary);
+  --color-primary-strong: var(--primary-strong);
+  --color-primary-soft: var(--primary-soft);
+  --color-on-primary: var(--on-primary);
+  --color-secondary: var(--secondary);
+  --color-secondary-soft: var(--secondary-soft);
+  --color-on-secondary: var(--on-secondary);
+  --color-tertiary: var(--tertiary);
+  --color-tertiary-soft: var(--tertiary-soft);
+
+  /* Older components say "accent": it is the primary. */
+  --color-accent: var(--primary);
+  --color-accent-soft: var(--primary-soft);
+
   --color-good: var(--good);
   --color-warn: var(--warn);
   --color-bad: var(--bad);
+
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+}
+
+html {
+  scroll-behavior: smooth;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-geist-sans), system-ui, sans-serif;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+::selection {
+  background: color-mix(in oklab, var(--primary) 30%, transparent);
+}
+
+/* Subtle blueprint grid used behind the hero and app chrome. */
+.bg-grid {
+  background-image:
+    linear-gradient(to right, var(--grid-line) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--grid-line) 1px, transparent 1px);
+  background-size: 44px 44px;
+}
+
+.shadow-soft {
+  box-shadow:
+    0 1px 2px rgb(var(--shadow-color) / 0.06),
+    0 8px 24px -12px rgb(var(--shadow-color) / 0.18);
+}
+.shadow-lift {
+  box-shadow:
+    0 1px 2px rgb(var(--shadow-color) / 0.08),
+    0 24px 60px -24px rgb(var(--shadow-color) / 0.35);
+}
+
+.text-gradient {
+  background: linear-gradient(100deg, var(--primary) 10%, var(--tertiary) 90%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
 }
 
 @keyframes pulse-dot {
@@ -58,6 +180,23 @@ body {
 }
 .pulse-dot { animation: pulse-dot 1.2s ease-in-out infinite; }
 
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.fade-up { animation: fade-up 0.6s ease-out both; }
+
 @media (prefers-reduced-motion: reduce) {
-  .pulse-dot { animation: none; }
+  .pulse-dot, .fade-up { animation: none; }
+  html { scroll-behavior: auto; }
+}
+
+/* MapLibre controls follow the theme. */
+.maplibregl-ctrl-group {
+  background: var(--surface) !important;
+  border: 1px solid var(--border);
+  box-shadow: none !important;
+}
+[data-theme="dark"] .maplibregl-ctrl-group button .maplibregl-ctrl-icon {
+  filter: invert(1);
 }

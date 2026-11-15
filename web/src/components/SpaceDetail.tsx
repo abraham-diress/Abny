@@ -14,7 +14,7 @@ import { SpaceTour } from "@/components/SpaceTour";
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section className="space-y-2">
-      <h3 className="text-xs font-semibold tracking-wide text-muted uppercase">{title}</h3>
+      <h3 className="text-[11px] font-semibold tracking-[0.1em] text-muted uppercase">{title}</h3>
       {children}
     </section>
   );
@@ -78,12 +78,12 @@ function BrokerEmail({ text }: { text: string }) {
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
-        className="inline-flex items-center gap-2 rounded-lg border border-border bg-surface px-3 py-1.5 text-sm hover:border-muted focus-visible:outline-2 focus-visible:outline-accent"
+        className="inline-flex items-center gap-2 rounded-lg bg-secondary px-3 py-1.5 text-sm font-medium text-on-secondary transition-opacity hover:opacity-90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-secondary"
       >
         <Mail className="size-4" /> {open ? "Hide broker email" : "Email broker"}
       </button>
       {open && (
-        <div className="space-y-2 rounded-xl border border-border bg-surface p-3">
+        <div className="space-y-2 rounded-xl border border-border bg-surface-2/50 p-3">
           <pre className="font-sans text-sm whitespace-pre-wrap text-pretty">{text}</pre>
           <button type="button" onClick={copy} className="inline-flex items-center gap-1.5 text-sm text-accent hover:underline">
             {copied ? <Check className="size-4" /> : <Copy className="size-4" />} {copied ? "Copied" : "Copy draft"}
@@ -112,8 +112,8 @@ export function SpaceDetail({ result }: { result: CandidateResult }) {
 
   return (
     <article className="space-y-6">
-      <header className="space-y-1">
-        <p className="text-sm text-muted">Rank #{result.rank}</p>
+      <header className="space-y-1.5">
+        <p className="inline-flex items-center gap-1.5 rounded-full bg-primary-soft px-2 py-0.5 text-xs font-semibold text-primary">Rank #{result.rank}</p>
         <h2 className="text-2xl font-semibold tracking-tight text-balance">{space.address}</h2>
         <p className="text-sm text-muted">
           {space.property_type ?? "Space"}
@@ -151,7 +151,7 @@ export function SpaceDetail({ result }: { result: CandidateResult }) {
       )}
 
       <Section title="Why it ranked here">
-        <ul className="list-disc space-y-1 pl-5 text-sm marker:text-accent">
+        <ul className="list-disc space-y-1 pl-5 text-sm marker:text-primary">
           {result.rank_reasons.map((r, i) => (
             <li key={i} className="text-pretty">{r}</li>
           ))}

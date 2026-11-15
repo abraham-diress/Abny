@@ -169,10 +169,18 @@ export async function connectBundle(iframe: HTMLIFrameElement): Promise<MpSdk> {
   return sdk;
 }
 
-/** One ambient + directional light rig so loaded models aren't black. */
+/** Ambient + overhead directional light so loaded models aren't black. The default "mp.lights"
+ *  rig is too dim for textured (PBR) furniture: white desks rendered almost black. */
 export async function addLights(sdk: MpSdk): Promise<MpSceneObject> {
   const [obj] = await sdk.Scene.createObjects(1);
-  obj.addNode().addComponent("mp.lights");
+  const node = obj.addNode();
+  node.addComponent("mp.ambientLight", { intensity: 1.6, color: { r: 1, g: 1, b: 1 } });
+  node.addComponent("mp.directionalLight", {
+    intensity: 1.4,
+    color: { r: 1, g: 0.98, b: 0.94 },
+    position: { x: 2, y: 8, z: 4 },
+    target: { x: 0, y: 0, z: 0 },
+  });
   obj.start();
   return obj;
 }

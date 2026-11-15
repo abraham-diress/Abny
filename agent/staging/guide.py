@@ -15,7 +15,7 @@ import re
 import cv2
 import numpy as np
 
-from agent.layout.geometry import item_footprint, room_polygon
+from agent.layout.geometry import is_void, item_footprint, room_polygon
 from agent.staging.camera import PanoCamera, box_corners
 from agent.staging.files import ensure_dirs, mask_url_for, to_path, to_url
 from shared.conventions import GUIDES_DIR
@@ -57,7 +57,7 @@ def draw_items(img: np.ndarray, layout: Layout, pano: PanoRef, floor_y: float) -
     overlay = img.copy()
     mask = np.zeros((h, w), dtype=np.uint8)
     drawn = []
-    for item in layout.items:
+    for item in _in_camera_room(layout, pano):
         corners = box_corners(item.x_m, item.z_m, item.width_m, item.depth_m, item.height_m, item.rotation_deg, floor_y)
         px, ok = cam.project(corners)
         if not ok.all():
@@ -82,12 +82,44 @@ def draw_items(img: np.ndarray, layout: Layout, pano: PanoRef, floor_y: float) -
     return guide, mask, len(drawn)
 
 
+def _in_camera_room(layout: Layout, pano: PanoRef) -> list:
+    """Items the camera can actually see: those in its own room (walls hide the rest).
+    Panoramas without a room id see everything."""
+    if not pano.room_id:
+        return list(layout.items)
+    return [i for i in layout.items if i.room_id == pano.room_id]
+
+
+def view_score(layout: Layout, pano: PanoRef, floor_y: float | None = None) -> float:
+    """How good this face is as the hero view: items fully in frame at a readable size count most;
+    an item filling the foreground (camera right next to it) counts against the view."""
+    cam = PanoCamera(pano)
+    fy = _floor_y(layout, pano) if floor_y is None else floor_y
+    w, h = pano.width_px, pano.height_px
+    score = 0.0
+    for item in _in_camera_room(layout, pano):
+        corners = box_corners(item.x_m, item.z_m, item.width_m, item.depth_m, item.height_m, item.rotation_deg, fy)
+        px, ok = cam.project(corners)
+        if not ok.all():
+            continue
+        inside = (px[:, 0] >= 0) & (px[:, 0] < w) & (px[:, 1] >= 0) & (px[:, 1] < h)
+        hull = cv2.convexHull(px.astype(np.float32))
+        frac = cv2.contourArea(hull) / float(w * h)
+        if frac > 0.3:
+            score -= 1.0  # blocks the view
+        elif inside.all() and frac >= 0.003:
+            score += 1.0 + 0.5 * min(frac, 0.05) / 0.05
+        elif inside.any():
+            score += 0.3
+    return score
+
+
 def count_visible(layout: Layout, pano: PanoRef, floor_y: float | None = None) -> int:
-    """How many of the layout's items this panorama face shows (used to pick the hero view)."""
+    """How many of the layout's items this panorama face shows (center in frame, camera's room only)."""
     cam = PanoCamera(pano)
     fy = _floor_y(layout, pano) if floor_y is None else floor_y
     n = 0
-    for item in layout.items:
+    for item in _in_camera_room(layout, pano):
         corners = box_corners(item.x_m, item.z_m, item.width_m, item.depth_m, item.height_m, item.rotation_deg, fy)
         px, ok = cam.project(corners)
         if ok.all():
@@ -112,10 +144,19 @@ def render_floorplan(layout: Layout, rooms: list[Room], px_per_m: int = 60) -> s
     def P(x: float, z: float) -> tuple[int, int]:
         return int((x - x0) * px_per_m), int((z - z0) * px_per_m)
 
-    for p in polys:
+    used = {i.room_id for i in layout.items}
+    labels = []
+    for r, p in zip(rooms, polys):
         pts = np.array([P(x, z) for x, z in p.exterior.coords], np.int32)
-        cv2.fillPoly(img, [pts], (236, 236, 236))
+        void = is_void(r)
+        # Rooms the plan uses are gray; unused rooms (restrooms, halls, spare rooms) stay pale and labeled.
+        cv2.fillPoly(img, [pts], (205, 205, 205) if void else (236, 236, 236) if r.room_id in used else (247, 246, 243))
         cv2.polylines(img, [pts], True, (60, 60, 60), 3)
+        if r.room_id not in used and p.area >= 2.0:
+            name = (r.label or r.room_type or "").strip()
+            name = "void" if void else (name if name and name.lower() not in ("other", "unknown") else "unused")
+            c = p.representative_point()
+            labels.append((name.lower(), P(c.x, c.y)))
     for r in rooms:
         for o in r.openings:
             color = {"door": (60, 60, 220), "window": (220, 170, 60)}.get(o.kind, (160, 160, 160))
@@ -135,6 +176,9 @@ def render_floorplan(layout: Layout, rooms: list[Room], px_per_m: int = 60) -> s
         cv2.circle(img, P(*layout.entrance_xz), 10, (60, 60, 220), -1)
     # Plans are drawn with +z down the image; flip so the entrance usually sits at the bottom.
     img = cv2.flip(img, 0)
+    for text, (lx, ly) in labels:
+        (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+        cv2.putText(img, text, (lx - tw // 2, H - 1 - ly + th // 2), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (150, 150, 150), 1, cv2.LINE_AA)
     unit = "desks" if layout.business_type == "office" else "seats"
     label = f"{layout.business_type} | {layout.seat_count} {unit} | {layout.strategy or ''}"
     cv2.putText(img, label, (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (40, 40, 40), 2, cv2.LINE_AA)

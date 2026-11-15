@@ -107,6 +107,24 @@ def test_replay_only_offices(client, monkeypatch, tmp_path):
     assert office_results and all(r["run_id"] == oid and "office" in r["space"]["property_type"].lower() for r in office_results)
 
 
+def test_replay_replan_plans_again_and_drops_the_old_photo(monkeypatch):
+    """DEMO_REPLAN: a recorded result gets a layout from the current planner; the old photo is dropped."""
+    from agent import providers as P
+    from server import runs
+    from shared.schemas import Brief, Opening, Room
+
+    rooms = [Room(room_id="R", space_id="S", polygon_m=[(0, 0), (14, 0), (14, 10), (0, 10)], area_m2=140,
+                  openings=[Opening(kind="door", a=(6, 0), b=(7, 0))])]
+    monkeypatch.setattr(P, "get_rooms", lambda sid: rooms)
+    recorded = {"space": {"space_id": "S"}, "layout": {"items": []}, "validation": {"passed": False}, "hero": {"path": "old.png"}}
+    brief = Brief(business_type="office", seats_wanted=10)
+    cache: dict = {}
+    out = runs._replan(recorded, brief, cache)
+    assert out["hero"] is None and out["validation"]["passed"] is True and len(out["layout"]["items"]) > 1
+    assert runs._replan(recorded, brief, cache)["layout"] == out["layout"]  # cached per space
+    no_layout = {"space": {"space_id": "S"}, "layout": None}
+    assert runs._replan(no_layout, brief, cache) is no_layout  # nothing to re-plan stays as recorded
+
 def test_space_rooms(client):
     r = client.get("/api/spaces/sample-hou-01/rooms")
     assert r.status_code == 200 and r.json() and "polygon_m" in r.json()[0]

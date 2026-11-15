@@ -8,13 +8,18 @@ Every model:
 * faces +z (its "front": doors, glass, the customer side).
 So the frontend places it at (x_m, floor_y, z_m) and rotates it by rotation_deg about +y.
 
-Swap any file for a nicer model later (same name, same size and orientation).
+Realistic parts (chairs, café tables, bench, sofa, cabinet, shelves, cash register, pastries,
+plants) come from CC0 Poly Haven models: run `python assets/fetch_cc0.py` first (downloads to the
+gitignored data/cc0/). Without them every item falls back to simple box geometry. Kitchen
+equipment, desks and counters stay simple shapes (there are no good CC0 models for them).
 """
 
 from __future__ import annotations
 
 import json
+import math
 import sys
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -44,6 +49,7 @@ def box(w, h, d, x=0.0, y=0.0, z=0.0, color=WOOD) -> trimesh.Trimesh:
 
 def cylinder(r, h, x=0.0, y=0.0, z=0.0, color=STEEL) -> trimesh.Trimesh:
     m = trimesh.creation.cylinder(radius=r, height=h, sections=24)
+    m.apply_transform(trimesh.transformations.rotation_matrix(math.pi / 2, (1, 0, 0)))  # trimesh builds it along z: stand it up
     m.apply_translation((x, y + h / 2, z))
     m.visual.vertex_colors = np.tile(np.array(color, dtype=np.uint8), (len(m.vertices), 1))
     return m
@@ -72,6 +78,25 @@ def table_top(w, d, x=0.0, z=0.0) -> list[trimesh.Trimesh]:
     return [box(w, 0.04, d, x, 0.72, z, WOOD), box(0.06, 0.72, 0.06, x, 0, z, BLACK), box(0.45, 0.03, 0.45, x, 0, z, BLACK)]
 
 
+OAK = (206, 168, 120, 255)  # light oak desk tops
+WALNUT = (112, 78, 56, 255)
+TEAL = (58, 134, 140, 255)  # accent: screens, upholstery, bars
+CORAL = (226, 112, 86, 255)  # accent: reception front
+MUSTARD = (222, 170, 70, 255)
+TERRACOTTA = (176, 98, 68, 255)
+SOIL = (60, 45, 35, 255)
+LEAF = (95, 150, 80, 255)
+LAMP_SHADE = (240, 228, 200, 255)
+
+
+def sphere(r, x=0.0, y=0.0, z=0.0, color=(70, 120, 70, 255)) -> trimesh.Trimesh:
+    """Ball of radius r centered at (x, y, z): foliage."""
+    m = trimesh.creation.icosphere(subdivisions=2, radius=r)
+    m.apply_translation((x, y, z))
+    m.visual.vertex_colors = np.tile(np.array(color, dtype=np.uint8), (len(m.vertices), 1))
+    return m
+
+
 PLASTIC_WHITE = (232, 232, 228, 255)
 CHARCOAL = (60, 62, 66, 255)
 SCREEN = (25, 28, 32, 255)
@@ -93,7 +118,7 @@ def task_chair(x, z, facing_z: float) -> list[trimesh.Trimesh]:
 
 def office_desk(w, d, x, z, monitor_side: float) -> list[trimesh.Trimesh]:
     """Desk top w x d at 0.74 m, two legs, a monitor at the `monitor_side` (+1/-1 along z) edge."""
-    parts = [box(w, 0.03, d, x, 0.72, z, PLASTIC_WHITE)]
+    parts = [box(w, 0.03, d, x, 0.72, z, OAK)]
     parts += [box(0.04, 0.72, d * 0.9, x + sx, 0, z, DARK_STEEL) for sx in (-w / 2 + 0.03, w / 2 - 0.03)]
     mz = z + monitor_side * (d / 2 - 0.12)
     parts += [box(0.6, 0.36, 0.03, x, 0.9, mz, SCREEN), box(0.06, 0.16, 0.06, x, 0.75, mz, DARK_STEEL)]
@@ -155,7 +180,7 @@ def build(item: dict) -> trimesh.Trimesh:
         parts += [box(w, 0.025, d, y=k * h / 5, color=WOOD) for k in range(1, 5)]
     elif t == "desk_pod":
         # Two desks per side, facing each other across a low screen; chairs on the outside.
-        parts = [box(w * 0.98, 0.35, 0.03, y=0.75, color=FABRIC)]
+        parts = [box(w * 0.98, 0.35, 0.03, y=0.75, color=TEAL)]
         for side in (-1, 1):
             for dx in (-w / 4, w / 4):
                 parts += office_desk(w / 2 - 0.04, 0.7, dx, side * 0.36, monitor_side=-side)
@@ -164,7 +189,7 @@ def build(item: dict) -> trimesh.Trimesh:
         # Desk against the wall (-z), chair in front of it (+z side).
         parts = office_desk(w - 0.04, 0.7, 0, -d / 2 + 0.36, monitor_side=-1) + task_chair(0, -d / 2 + 0.7 + 0.42, facing_z=-1)
     elif t == "meeting_table":
-        parts = [box(2.0, 0.04, 1.1, y=0.72, color=WOOD)]
+        parts = [box(2.0, 0.04, 1.1, y=0.72, color=WALNUT)]
         parts += [box(0.08, 0.72, 0.8, x=sx, color=DARK_STEEL) for sx in (-0.75, 0.75)]
         for dx in (-0.7, 0.0, 0.7):
             parts += task_chair(dx, -0.95, facing_z=+1) + task_chair(dx, 0.95, facing_z=-1)
@@ -173,7 +198,7 @@ def build(item: dict) -> trimesh.Trimesh:
         parts += [cylinder(0.03, 0.42, x=sx, y=0.02, color=DARK_STEEL) for sx in (-1.03, 1.03)]
     elif t == "reception_desk":
         # Visitors on +z; a raised top facing them; staff chair behind (-z, against the wall).
-        parts = [box(w, 1.05, 0.6, z=d / 2 - 0.3, color=WOOD), box(w, 0.04, 0.35, y=1.05, z=d / 2 - 0.18, color=PLASTIC_WHITE),
+        parts = [box(w, 1.05, 0.6, z=d / 2 - 0.3, color=CORAL), box(w, 0.04, 0.35, y=1.05, z=d / 2 - 0.18, color=PLASTIC_WHITE),
                  box(w * 0.9, 0.03, 0.6, y=0.72, z=d / 2 - 0.85, color=PLASTIC_WHITE)]
         parts += [box(0.6, 0.36, 0.03, y=0.9, z=d / 2 - 0.68, color=SCREEN)]
         parts += task_chair(0, -d / 2 + 0.3, facing_z=+1)
@@ -184,7 +209,7 @@ def build(item: dict) -> trimesh.Trimesh:
         parts = [box(w, h, 0.05, z=-d / 2 + 0.025, color=CHARCOAL), box(w, 0.08, d, y=h - 0.08, color=CHARCOAL),
                  box(w, 0.05, d, color=CHARCOAL), box(w * 0.96, h - 0.15, 0.02, y=0.05, z=d / 2 - 0.01, color=GLASS)]
         parts += [box(0.05, h, d, x=sx, color=CHARCOAL) for sx in (-w / 2 + 0.025, w / 2 - 0.025)]
-        parts += [box(0.6, 0.03, 0.35, y=1.0, z=-d / 2 + 0.2, color=WOOD), box(0.4, 0.45, 0.4, color=UPHOLSTERY)]
+        parts += [box(0.6, 0.03, 0.35, y=1.0, z=-d / 2 + 0.2, color=WOOD), box(0.4, 0.45, 0.4, color=TEAL)]
     elif t == "storage_cabinet":
         parts = [box(w, h, d, color=PLASTIC_WHITE)]
         parts += [box(0.02, h * 0.9, 0.01, x=0, y=h * 0.05, z=d / 2, color=CHARCOAL)]
@@ -194,10 +219,85 @@ def build(item: dict) -> trimesh.Trimesh:
                  box(0.5, 0.03, 0.4, x=-w / 4, y=0.91, color=STEEL),
                  box(w, 0.7, 0.35, y=1.5, z=-d / 2 + 0.175, color=PLASTIC_WHITE),
                  box(0.55, 0.85, 0.55, x=w / 2 - 0.3, y=0.92, z=-0.02, color=DARK_STEEL)]  # fridge/coffee
+    elif t == "lounge_set":
+        # Sofa against the back (-z), coffee table in front of it, an armchair on each side facing the table.
+        parts = [box(2.0, 0.42, 0.9, z=-d / 2 + 0.45, color=UPHOLSTERY), box(2.0, 0.43, 0.2, y=0.42, z=-d / 2 + 0.1, color=UPHOLSTERY)]
+        parts += [box(0.18, 0.2, 0.9, x=sx, y=0.42, z=-d / 2 + 0.45, color=UPHOLSTERY) for sx in (-0.91, 0.91)]
+        parts += [box(1.0, 0.04, 0.55, y=0.38, z=0.1, color=WOOD), box(0.06, 0.38, 0.06, x=-0.4, z=0.1, color=BLACK), box(0.06, 0.38, 0.06, x=0.4, z=0.1, color=BLACK)]
+        for sx, face in ((-1.08, 1), (1.08, -1)):  # armchair seat 0.75, back on the outer side
+            parts += [box(0.75, 0.4, 0.75, x=sx, z=0.1, color=FABRIC), box(0.2, 0.4, 0.75, x=sx - 0.275 * face, y=0.4, z=0.1, color=FABRIC)]
+    elif t == "huddle_table":
+        parts = [cylinder(0.55, 0.04, y=0.72, color=WOOD), cylinder(0.05, 0.72, color=BLACK), cylinder(0.3, 0.03, color=BLACK)]
+        parts += chair(0, -0.64, +1) + chair(0, 0.64, -1) + chair_x(-0.64, 0, +1) + chair_x(0.64, 0, -1)
+    elif t == "coffee_bar":
+        parts = [box(w, h - 0.06, d, color=TEAL), box(w + 0.04, 0.06, d + 0.04, y=h - 0.06, color=OAK),
+                 box(0.55, 0.45, 0.4, x=-w * 0.25, y=h, z=-d * 0.15, color=STEEL), box(0.3, 0.3, 0.3, x=w * 0.2, y=h, z=-d * 0.15, color=BLACK),
+                 box(0.6, 0.12, 0.4, x=w * 0.3, y=h, z=d * 0.1, color=PLASTIC_WHITE)]
+    elif t == "bookshelf":
+        parts = [box(w, h, 0.03, z=-d / 2 + 0.015, color=WOOD)]
+        parts += [box(0.03, h, d, x=sx, color=WOOD) for sx in (-w / 2 + 0.015, w / 2 - 0.015)]
+        parts += [box(w, 0.03, d, y=k * (h - 0.03) / 5, color=WOOD) for k in range(6)]
+        shades = [(150, 70, 60, 255), (70, 100, 150, 255), (90, 130, 90, 255), (200, 170, 90, 255), PLASTIC_WHITE]
+        for row in range(1, 5):  # books: narrow boxes of varying height on four shelves
+            x = -w / 2 + 0.08
+            k = 0
+            while x < w / 2 - 0.12:
+                bw = 0.04 + 0.02 * (k % 3)
+                parts.append(box(bw, 0.2 + 0.05 * ((k + row) % 3), d * 0.75, x + bw / 2, row * (h - 0.03) / 5 + 0.03, 0.0, shades[(k + row) % len(shades)]))
+                x += bw + 0.005
+                k += 1
+    elif t == "printer_station":
+        parts = [box(w, 0.8, d, color=PLASTIC_WHITE), box(0.6, 0.3, 0.5, y=0.8, color=CHARCOAL), box(0.5, 0.02, 0.3, y=1.1, z=0.0, color=WHITE),
+                 box(0.02, 0.5, 0.01, y=0.15, z=d / 2, color=CHARCOAL)]
+    elif t == "whiteboard":
+        parts = [box(w, 1.0, 0.03, y=0.9, z=-d / 2 + 0.2, color=PLASTIC_WHITE), box(w + 0.04, 0.03, 0.05, y=0.88, z=-d / 2 + 0.2, color=DARK_STEEL),
+                 box(w + 0.04, 0.03, 0.05, y=1.9 - 0.03, z=-d / 2 + 0.2, color=DARK_STEEL)]
+        parts += [box(0.04, 0.9, 0.04, x=sx, z=-d / 2 + 0.2, color=DARK_STEEL) for sx in (-w / 2 + 0.1, w / 2 - 0.1)]
+        parts += [box(0.05, 0.04, 0.4, x=sx, z=-d / 2 + 0.2, color=DARK_STEEL) for sx in (-w / 2 + 0.1, w / 2 - 0.1)]
+        parts += [box(0.35, 0.02, 0.07, x=0.0, y=0.88, z=-d / 2 + 0.25, color=CHARCOAL)]
+    elif t == "plant_large":
+        parts = [cylinder(0.22, 0.4, color=TERRACOTTA), cylinder(0.21, 0.02, y=0.4, color=SOIL), cylinder(0.025, 0.5, y=0.4, color=DARK_WOOD)]
+        parts += [sphere(0.27, 0.0, 1.05, 0.0, PLANT), sphere(0.2, 0.09, 1.3, 0.06, LEAF), sphere(0.2, -0.09, 0.88, -0.05, LEAF),
+                  sphere(0.17, -0.05, 1.42, 0.1, PLANT), sphere(0.17, 0.11, 0.82, 0.1, PLANT)]
+    elif t == "planter_divider":
+        parts = [box(w, 0.45, d, color=CHARCOAL), box(w - 0.06, 0.02, d - 0.06, y=0.45, color=SOIL)]
+        parts += [sphere(0.24, x, 0.78, 0.0, PLANT) for x in np.linspace(-w / 2 + 0.3, w / 2 - 0.3, 4)]
+        parts += [sphere(0.18, x, 1.0, 0.0, LEAF) for x in np.linspace(-w / 2 + 0.5, w / 2 - 0.5, 3)]
+    elif t.startswith("rug_"):
+        base = {"rug_lounge": (46, 111, 121, 255), "rug_huddle": (196, 106, 75, 255), "rug_meeting": (72, 92, 128, 255)}.get(t, (120, 120, 130, 255))
+        edge = tuple(min(255, int(c * 1.25)) for c in base[:3]) + (255,)
+        parts = [box(w, 0.012, d, color=base), box(w - 0.3, 0.008, d - 0.3, y=0.012, color=edge), box(w - 0.55, 0.008, d - 0.55, y=0.02, color=base)]
+    elif t == "floor_lamp":
+        parts = [cylinder(0.2, 0.03, color=BLACK), cylinder(0.015, 1.35, y=0.03, color=DARK_STEEL), cylinder(0.2, 0.32, y=1.38, color=MUSTARD)]
     else:
         parts = [box(w, h, d)]
     mesh = trimesh.util.concatenate(parts)
     return mesh
+
+
+def bake_materials(scene: trimesh.Scene) -> trimesh.Scene:
+    """Give every vertex-coloured mesh a real material per colour (and drop the vertex colours).
+    Viewers that ignore COLOR_0 (the Matterport scene one included) draw vertex-coloured parts black;
+    a plain PBR material with a base colour looks the same everywhere."""
+    for gname in list(scene.geometry):
+        g = scene.geometry[gname]
+        if not (isinstance(g, trimesh.Trimesh) and isinstance(g.visual, trimesh.visual.ColorVisuals) and g.visual.kind == "vertex"):
+            continue
+        nodes = [(n, scene.graph[n][0]) for n in scene.graph.nodes_geometry if scene.graph[n][1] == gname]
+        vc = np.asarray(g.visual.vertex_colors)
+        face_colors = vc[g.faces[:, 0]]
+        pieces = []
+        for color in np.unique(face_colors, axis=0):
+            idx = np.nonzero((face_colors == color).all(axis=1))[0]
+            sub = g.submesh([idx], append=True)
+            sub.visual = trimesh.visual.TextureVisuals(material=trimesh.visual.material.PBRMaterial(
+                baseColorFactor=[int(c) for c in color], metallicFactor=0.0, roughnessFactor=0.8, doubleSided=True))
+            pieces.append(sub)
+        scene.delete_geometry(gname)
+        for node, matrix in nodes:
+            for k, piece in enumerate(pieces):
+                scene.add_geometry(piece, node_name=f"{node}_c{k}", geom_name=f"{gname}_c{k}", transform=matrix)
+    return scene
 
 
 def check(mesh: trimesh.Trimesh, item: dict) -> None:
@@ -209,16 +309,283 @@ def check(mesh: trimesh.Trimesh, item: dict) -> None:
     assert y1 <= h + 0.5, f"{item['item_type']}: height {y1:.2f} vs {h}"
 
 
+# --------------------------------------------------------------------------- #
+# Realistic parts from CC0 models (data/cc0/<id>/<id>.gltf, see fetch_cc0.py)
+# --------------------------------------------------------------------------- #
+
+CC0_DIR = ROOT.parent / "data" / "cc0"
+TEX_MAX = 512  # texture side in pixels: keeps each GLB small enough for the browser
+
+
+SMALL_PROPS = {"croissant", "carrot_cake", "strawberry_chocolate_cake", "hamburger_buns", "potted_plant_02", "CashRegister_01"}
+
+
+def _shrink(img, side: int):
+    """Resize to at most `side` pixels and re-encode as JPEG (PNG if it has transparency):
+    trimesh writes images in their own format, and PNG textures made the files 5-10x bigger."""
+    import io
+
+    from PIL import Image
+
+    if max(img.size) > side:
+        k = side / max(img.size)
+        img = img.resize((max(1, int(img.size[0] * k)), max(1, int(img.size[1] * k))))
+    buf = io.BytesIO()
+    if img.mode in ("RGBA", "LA", "P"):
+        img.save(buf, format="PNG", optimize=True)
+    else:
+        img.convert("RGB").save(buf, format="JPEG", quality=82)
+    buf.seek(0)
+    out = Image.open(buf)
+    out.load()
+    return out
+
+
+@lru_cache(maxsize=None)
+def cc0(mid: str) -> tuple[trimesh.Trimesh, ...] | None:
+    """The model's meshes in world units, centered on x/z with the bottom at y = 0, textures shrunk."""
+    path = CC0_DIR / mid / f"{mid}.gltf"
+    if not path.exists():
+        return None
+    meshes = [m for m in trimesh.load(path, force="scene").dump() if isinstance(m, trimesh.Trimesh)]
+    allv = np.vstack([m.vertices for m in meshes])
+    lo, hi = allv.min(axis=0), allv.max(axis=0)
+    shift = np.array([-(lo[0] + hi[0]) / 2, -lo[1], -(lo[2] + hi[2]) / 2])
+    side = 256 if mid in SMALL_PROPS else TEX_MAX
+    seen: dict[int, object] = {}
+    for m in meshes:
+        m.apply_translation(shift)
+        mat = getattr(m.visual, "material", None)
+        for attr in ("baseColorTexture", "metallicRoughnessTexture", "normalTexture", "occlusionTexture", "emissiveTexture"):
+            img = getattr(mat, attr, None) if mat is not None else None
+            if img is not None:
+                if id(img) not in seen:
+                    seen[id(img)] = _shrink(img, side)
+                setattr(mat, attr, seen[id(img)])
+    return tuple(meshes)
+
+
+def have(*mids: str) -> bool:
+    return all(cc0(m) is not None for m in mids)
+
+
+class Instance:
+    """One placement of a CC0 model: exported as a node pointing at the shared mesh (glTF instancing),
+    so four identical chairs cost one chair, and the JPEG textures stay JPEG."""
+
+    def __init__(self, mid: str, transform: np.ndarray) -> None:
+        self.mid, self.transform = mid, transform
+
+    def meshes(self) -> list[trimesh.Trimesh]:  # transformed copies, only for size checks
+        out = []
+        for m in cc0(self.mid):
+            c = trimesh.Trimesh(vertices=m.vertices.copy(), faces=m.faces, process=False)
+            c.apply_transform(self.transform)
+            out.append(c)
+        return out
+
+
+def put(mid: str, x=0.0, z=0.0, y=0.0, facing=(0.0, 1.0), scale=(1.0, 1.0, 1.0)) -> list[Instance]:
+    """A CC0 model scaled, turned to face `facing` (x, z) and placed with its base at (x, y, z).
+    Models face +z as authored (chairs: seat front toward +z)."""
+    angle = math.atan2(facing[0], facing[1])
+    t = trimesh.transformations.rotation_matrix(angle, (0, 1, 0)) @ np.diag([scale[0], scale[1], scale[2], 1.0])
+    t[:3, 3] = (x, y, z)
+    return [Instance(mid, t)]
+
+
+def glass(w, h, d, x=0.0, y=0.0, z=0.0) -> trimesh.Trimesh:
+    """See-through glass panel/box (alpha-blended material)."""
+    m = trimesh.creation.box(extents=(w, h, d))
+    m.apply_translation((x, y + h / 2, z))
+    mat = trimesh.visual.material.PBRMaterial(baseColorFactor=[0.85, 0.93, 0.97, 0.22], metallicFactor=0.0,
+                                              roughnessFactor=0.05, alphaMode="BLEND", doubleSided=True)
+    m.visual = trimesh.visual.TextureVisuals(material=mat)
+    return m
+
+
+def ellipsoid(rx, ry, rz, x=0.0, y=0.0, z=0.0, color=(230, 120, 40, 255)) -> trimesh.Trimesh:
+    m = trimesh.creation.icosphere(subdivisions=2, radius=1.0)
+    m.apply_scale([rx, ry, rz])
+    m.apply_translation((x, y, z))
+    m.visual.vertex_colors = np.tile(np.array(color, dtype=np.uint8), (len(m.vertices), 1))
+    return m
+
+
+def water(w, h, d, x=0.0, y=0.0, z=0.0) -> trimesh.Trimesh:
+    """Blue see-through water surface (alpha-blended material)."""
+    m = trimesh.creation.box(extents=(w, h, d))
+    m.apply_translation((x, y + h / 2, z))
+    mat = trimesh.visual.material.PBRMaterial(baseColorFactor=[0.16, 0.47, 0.62, 0.55], metallicFactor=0.0,
+                                              roughnessFactor=0.05, alphaMode="BLEND", doubleSided=True)
+    m.visual = trimesh.visual.TextureVisuals(material=mat)
+    return m
+
+
+CAFE_CHAIR, MODERN_CHAIR = "painted_wooden_chair_01", "dining_chair_02"
+
+
+def build_real(item: dict) -> list[trimesh.Trimesh] | None:
+    """Realistic version of an item, or None to use the simple one."""
+    t, w, d, h = item["item_type"], item["width_m"], item["depth_m"], item["height_m"]
+    if t == "table_tennis":  # long side along x; net across the middle
+        parts = [box(w, 0.03, d, y=0.73, color=(28, 78, 140, 255)), box(w - 0.04, 0.004, 0.02, y=0.76, color=WHITE), box(0.02, 0.004, d - 0.04, x=0.0, y=0.76, color=WHITE),
+                 box(0.02, 0.15, d, y=0.76, color=WHITE), box(w - 0.04, 0.004, 0.02, y=0.76, z=d / 2 - 0.02, color=WHITE)]
+        parts += [box(0.05, 0.73, 0.05, x=sx, z=sz, color=CHARCOAL) for sx in (-w / 2 + 0.2, w / 2 - 0.2) for sz in (-d / 2 + 0.15, d / 2 - 0.15)]
+        parts += [box(0.16, 0.012, 0.18, x=-w / 2 + 0.5, y=0.76, z=0.25, color=(190, 40, 40, 255)), box(0.16, 0.012, 0.18, x=w / 2 - 0.5, y=0.76, z=-0.25, color=(30, 30, 30, 255)),
+                  sphere(0.02, 0.4, 0.78, 0.1, (250, 250, 240, 255))]
+        return parts
+    if t == "foosball_table":
+        green = (46, 125, 70, 255)
+        parts = [box(w, 0.05, d, y=0.78, color=WALNUT), box(w - 0.1, 0.02, d - 0.1, y=0.83, color=green)]
+        parts += [box(w, 0.1, 0.05, y=0.83, z=sz, color=WALNUT) for sz in (-d / 2 + 0.025, d / 2 - 0.025)] + [box(0.05, 0.1, d, x=sx, y=0.83, color=WALNUT) for sx in (-w / 2 + 0.025, w / 2 - 0.025)]
+        parts += [box(0.06, 0.78, 0.06, x=sx, z=sz, color=CHARCOAL) for sx in (-w / 2 + 0.08, w / 2 - 0.08) for sz in (-d / 2 + 0.08, d / 2 - 0.08)]
+        for k, x in enumerate((-0.45, -0.15, 0.15, 0.45)):  # rods across the table with a red or blue row of players
+            parts.append(box(0.015, 0.015, d, x=x, y=0.92, color=STEEL))
+            parts += [box(0.04, 0.1, 0.03, x=x, y=0.84, z=zz, color=(200, 50, 50, 255) if k % 2 == 0 else (50, 90, 200, 255)) for zz in (-0.18, 0.0, 0.18)]
+        return parts
+    if t == "fish_pond":
+        stone, rim = (150, 150, 142, 255), 0.22
+        parts = [box(w, h, rim, z=-d / 2 + rim / 2, color=stone), box(w, h, rim, z=d / 2 - rim / 2, color=stone),
+                 box(rim, h, d - 2 * rim, x=-w / 2 + rim / 2, color=stone), box(rim, h, d - 2 * rim, x=w / 2 - rim / 2, color=stone),
+                 box(w - 2 * rim, 0.28, d - 2 * rim, color=(34, 70, 84, 255))]
+        parts += [ellipsoid(0.16, 0.05, 0.06, x, 0.33, z, (232, 118, 40, 255)) for k, (x, z) in enumerate([(-0.7, 0.1), (0.2, -0.3), (0.8, 0.25), (-0.1, 0.35)])]
+        parts += [ellipsoid(0.12, 0.04, 0.05, 0.5, 0.31, -0.1, (245, 240, 230, 255)), cylinder(0.17, 0.012, -0.35, 0.42, -0.2, color=(70, 130, 70, 255)), cylinder(0.14, 0.012, 0.9, 0.42, 0.1, color=(70, 130, 70, 255))]
+        parts += [sphere(0.12, -w / 2 + rim + 0.18, 0.5, -d / 2 + rim + 0.15, (120, 120, 118, 255)), sphere(0.09, -w / 2 + rim + 0.34, 0.5, -d / 2 + rim + 0.12, (135, 135, 130, 255)), sphere(0.2, w / 2 - rim - 0.3, 0.62, d / 2 - rim - 0.25, PLANT)]
+        parts.append(water(w - 2 * rim, 0.01, d - 2 * rim, y=0.42))
+        return parts
+    if t == "table_2" and have("round_wooden_table_02", CAFE_CHAIR):
+        r = 0.7 / 0.8
+        return (put("round_wooden_table_02", scale=(r, 1, r)) + put(CAFE_CHAIR, z=-d / 2 + 0.28, facing=(0, 1))
+                + put(CAFE_CHAIR, z=d / 2 - 0.28, facing=(0, -1)))
+    if t == "table_4" and have("round_wooden_table_02", CAFE_CHAIR):
+        parts = put("round_wooden_table_02")
+        for fx, fz in ((0, 1), (0, -1), (1, 0), (-1, 0)):
+            parts += put(CAFE_CHAIR, x=-fx * (w / 2 - 0.28), z=-fz * (d / 2 - 0.28), facing=(fx, fz))
+        return parts
+    if t == "bench_table_4" and have("painted_wooden_bench", "wooden_table_02", CAFE_CHAIR):
+        parts = put("painted_wooden_bench", z=-d / 2 + 0.26, scale=(w / 1.2, 1, 1))
+        parts += put("wooden_table_02", z=-d / 2 + 0.52 + 0.36, scale=(w / 1.2, 1, 1))
+        parts += [p for sx in (-w / 4, w / 4) for p in put(CAFE_CHAIR, x=sx, z=d / 2 - 0.28, facing=(0, -1))]
+        return parts
+    if t == "display_case" and have("croissant", "carrot_cake", "hamburger_buns"):
+        base_h = h * 0.55
+        parts = [box(w, base_h, d, color=DARK_WOOD), box(w + 0.02, 0.03, d + 0.02, y=base_h - 0.03, color=WHITE)]
+        top = h - base_h
+        parts += [glass(w, top, 0.01, y=base_h, z=d / 2 - 0.005), glass(w, 0.01, d, y=h - 0.01),
+                  glass(0.01, top, d, x=-w / 2 + 0.005, y=base_h), glass(0.01, top, d, x=w / 2 - 0.005, y=base_h)]
+        shelves = [base_h, base_h + top * 0.42]
+        parts += [box(w * 0.94, 0.015, d * 0.8, y=shelves[1] - 0.015, color=WHITE)]
+        foods = ["croissant", "carrot_cake", "hamburger_buns", "croissant"]
+        for row, y in enumerate(shelves):
+            xs = np.linspace(-w / 2 + 0.22, w / 2 - 0.22, 5)
+            for k, x in enumerate(xs):
+                food = foods[(k + row) % len(foods)]
+                for dz in ((-0.12, 0.1) if food in ("croissant", "hamburger_buns") else (0.0,)):
+                    parts += put(food, x=x, z=dz, y=y + 0.002, facing=(0.3 * (k - 2), 1))
+        return parts
+    if t == "service_counter" and have("CashRegister_01"):
+        parts = [box(w, h - 0.04, d, color=WOOD), box(w + 0.04, 0.04, d + 0.04, y=h - 0.04, color=WHITE)]
+        return parts + put("CashRegister_01", x=w * 0.25, z=-0.05, y=h, scale=(0.6, 0.6, 0.6), facing=(0, -1))
+    if t == "retail_shelf" and have("wooden_display_shelves_01"):
+        return put("wooden_display_shelves_01", z=0.0, facing=(1, 0), scale=(d / 0.4, h / 1.56, w / 1.1))
+    if t == "desk_pod" and have(MODERN_CHAIR):
+        parts = [box(w * 0.98, 0.35, 0.03, y=0.75, color=TEAL)]
+        for side in (-1, 1):
+            for dx in (-w / 4, w / 4):
+                parts += office_desk(w / 2 - 0.04, 0.7, dx, side * 0.36, monitor_side=-side)
+                parts += put(MODERN_CHAIR, x=dx, z=side * (d / 2 - 0.3), facing=(0, -side))
+        return parts
+    if t == "single_desk" and have(MODERN_CHAIR):
+        return office_desk(w - 0.04, 0.7, 0, -d / 2 + 0.36, monitor_side=-1) + put(MODERN_CHAIR, z=d / 2 - 0.3, facing=(0, -1))
+    if t == "meeting_table" and have(MODERN_CHAIR):
+        parts = [box(2.0, 0.04, 1.1, y=0.72, color=WALNUT)]
+        parts += [box(0.08, 0.72, 0.8, x=sx, color=DARK_STEEL) for sx in (-0.75, 0.75)]
+        for dx in (-0.65, 0.0, 0.65):
+            parts += put(MODERN_CHAIR, x=dx, z=-(d / 2 - 0.3), facing=(0, 1)) + put(MODERN_CHAIR, x=dx, z=d / 2 - 0.3, facing=(0, -1))
+        parts += put(MODERN_CHAIR, x=-(w / 2 - 0.3), facing=(1, 0)) + put(MODERN_CHAIR, x=w / 2 - 0.3, facing=(-1, 0))
+        return parts
+    if t == "reception_desk" and have(MODERN_CHAIR):
+        parts = [box(w, 1.05, 0.6, z=d / 2 - 0.3, color=CORAL), box(w, 0.04, 0.35, y=1.05, z=d / 2 - 0.18, color=PLASTIC_WHITE),
+                 box(w * 0.9, 0.03, 0.6, y=0.72, z=d / 2 - 0.85, color=PLASTIC_WHITE), box(0.6, 0.36, 0.03, y=0.9, z=d / 2 - 0.68, color=SCREEN)]
+        return parts + put(MODERN_CHAIR, z=-d / 2 + 0.3, facing=(0, 1))
+    if t == "lounge_set" and have("sofa_02", "modern_arm_chair_01", "modern_coffee_table_01"):
+        parts = put("sofa_02", z=-d / 2 + 0.41, facing=(0, -1), scale=(2.0 / 1.81, 1, 1))
+        parts += put("modern_coffee_table_01", z=0.2, facing=(1, 0), scale=(0.83, 0.83, 0.83))
+        parts += put("modern_arm_chair_01", x=-(w / 2 - 0.47), z=0.42, facing=(1, 0), scale=(0.9, 0.9, 0.9))
+        parts += put("modern_arm_chair_01", x=w / 2 - 0.47, z=0.42, facing=(-1, 0), scale=(0.9, 0.9, 0.9))
+        return parts
+    if t == "huddle_table" and have("round_wooden_table_02", MODERN_CHAIR):
+        parts = put("round_wooden_table_02", scale=(1.25, 1.1, 1.25))
+        for fx, fz in ((0, 1), (0, -1), (1, 0), (-1, 0)):
+            parts += put(MODERN_CHAIR, x=-fx * (w / 2 - 0.3), z=-fz * (d / 2 - 0.3), facing=(fx, fz))
+        return parts
+    if t == "bookshelf" and have("wooden_bookshelf_worn"):
+        return put("wooden_bookshelf_worn", scale=(w / 1.37, h / 2.06, d / 0.58))
+    if t == "plant_large" and have("potted_plant_02"):
+        return [box(0.34, 0.7, 0.34, color=WHITE)] + put("potted_plant_02", y=0.7, scale=(0.85, 0.85, 0.85))
+    if t == "planter_divider" and have("potted_plant_02"):
+        parts = [box(w, 0.45, d, color=CHARCOAL)]
+        for x in np.linspace(-w / 2 + 0.33, w / 2 - 0.33, 3):
+            parts += put("potted_plant_02", x=float(x), y=0.45, scale=(0.6, 0.6, 0.6))
+        return parts
+    if t == "sofa" and have("sofa_02"):
+        return put("sofa_02", facing=(0, -1), scale=(w / 1.85, 1, d / 0.85))
+    if t == "storage_cabinet" and have("drawer_cabinet"):
+        return put("drawer_cabinet", scale=(w / 1.16, h / 1.9, d / 0.5))
+    return None
+
+
+def build_any(item: dict) -> tuple[trimesh.Scene, trimesh.Trimesh]:
+    """(scene to export, all geometry merged for size checks). Realistic parts when the CC0 sources
+    are present, simple shapes otherwise. Simple shapes are merged into one mesh; CC0 models are instanced."""
+    parts = build_real(item)
+    if parts is None:
+        mesh = build(item)
+        return trimesh.Scene([mesh]), mesh
+    meshes = [p for p in parts if isinstance(p, trimesh.Trimesh)]
+    simple = [m for m in meshes if isinstance(m.visual, trimesh.visual.ColorVisuals)]  # vertex-colored boxes
+    textured = [m for m in meshes if not isinstance(m.visual, trimesh.visual.ColorVisuals)]  # e.g. glass
+    insts = [p for p in parts if isinstance(p, Instance)]
+    scene = trimesh.Scene()
+    if simple:  # merging only same-kind meshes keeps their colors
+        scene.add_geometry(trimesh.util.concatenate(simple), geom_name="simple", node_name="simple")
+    for k, m in enumerate(textured):
+        scene.add_geometry(m, geom_name=f"textured_{k}", node_name=f"textured_{k}")
+    for k, inst in enumerate(insts):
+        for i, m in enumerate(cc0(inst.mid)):
+            name = f"{inst.mid}_{i}"
+            if name not in scene.geometry:
+                scene.geometry[name] = m
+            scene.graph.update(frame_to=f"{name}_n{k}", frame_from=scene.graph.base_frame, matrix=inst.transform, geometry=name)
+    plain = [trimesh.Trimesh(vertices=m.vertices, faces=m.faces, process=False) for m in meshes]
+    check_mesh = trimesh.util.concatenate(plain + [m for inst in insts for m in inst.meshes()])
+    return scene, check_mesh
+
+
 def main() -> int:
+    """Build every model, or only the named ones: `python assets/build_assets.py plant_large floor_lamp`.
+    (Without data/cc0 a full rebuild turns the realistic CC0 models back into boxes, so build just what you added.)"""
     OUT.mkdir(parents=True, exist_ok=True)
     items = json.loads(CATALOG.read_text())
+    only = set(sys.argv[1:])
+    if only:
+        items = [i for i in items if i["item_type"] in only]
+        missing = only - {i["item_type"] for i in items}
+        if missing:
+            print(f"not in the catalog: {', '.join(sorted(missing))}")
+            return 1
+    real = 0
     for item in items:
-        mesh = build(item)
+        scene, mesh = build_any(item)
+        real += build_real(item) is not None
         check(mesh, item)
+        scene = bake_materials(scene)
         path = ROOT.parent / item["glb_asset"]
         path.parent.mkdir(parents=True, exist_ok=True)
-        mesh.export(path)
-        print(f"{item['item_type']:18s} {path.stat().st_size / 1024:6.1f} KB  bounds {np.round(mesh.extents, 2)}")
+        scene.export(path)
+        print(f"{item['item_type']:20s} {path.stat().st_size / 1024:7.1f} KB  bounds {np.round(mesh.extents, 2)}")
+    print(f"{real} of {len(items)} items use CC0 models" + ("" if real else " (run assets/fetch_cc0.py first)"))
     return 0
 
 

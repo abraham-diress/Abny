@@ -19,11 +19,12 @@ from pathlib import Path
 from typing import Any
 
 from agent import config
+from agent import providers as P
 from agent.brief import apply_feedback, parse_brief, parse_brief_rules
 from agent.context import RunContext
 from agent.runner import resolve_mode, run_round
 from shared.conventions import RUNS_DIR
-from shared.schemas import AgentEvent, Brief, CandidateResult, Feedback, FeedbackRequest, FunnelStats, RunStatus
+from shared.schemas import AgentEvent, Brief, CandidateResult, Feedback, FeedbackRequest, FunnelStats, Inspection, RunStatus
 
 log = logging.getLogger(__name__)
 
@@ -161,6 +162,7 @@ class RunManager:
         ctx = run.ctx
         ctx.brief, ctx.round, ctx.results = brief, idx, []
         t0 = time.monotonic()
+        replanned: dict[str, Any] = {}
         for item in rnd["events"]:
             wait = item["dt"] / max(config.DEMO_SPEED, 0.01) - (time.monotonic() - t0)
             if wait > 0:
@@ -169,11 +171,33 @@ class RunManager:
             payload = ev.get("payload") or {}
             if ev["type"] == "candidate_ready" and "result" in payload:
                 payload["result"]["run_id"] = run.run_id
+                if config.DEMO_REPLAN:
+                    payload["result"] = _replan(payload["result"], brief, replanned)
             if ev["type"] == "funnel_update":
                 ctx.funnel = ctx.funnel.model_validate(payload["funnel"])
             ctx.emit(ev["type"], agent=ev.get("agent"), message=ev.get("message"), **payload)
-        ctx.results = [CandidateResult.model_validate({**r, "run_id": run.run_id}) for r in rnd["results"]]
+        results = [_replan(r, brief, replanned) for r in rnd["results"]] if config.DEMO_REPLAN else rnd["results"]
+        ctx.results = [CandidateResult.model_validate({**r, "run_id": run.run_id}) for r in results]
         ctx.fs.update(rnd.get("files", {}))
+
+
+def _replan(result: dict[str, Any], brief: Brief, cache: dict[str, Any]) -> dict[str, Any]:
+    """The recorded result with its layout planned again by the current planner. The recorded photo shows the
+    old layout, so it is dropped. Results without a layout, or whose planning fails, stay as recorded."""
+    sid = (result.get("space") or {}).get("space_id")
+    if not sid or not result.get("layout"):
+        return result
+    if sid not in cache:
+        try:
+            rooms = P.get_rooms(sid)
+            insp = Inspection.model_validate(result["inspection"]) if result.get("inspection") else None
+            lay = P.plan_layout(sid, rooms, insp, brief)
+            cache[sid] = (lay.model_dump(mode="json"), P.validate_layout(lay, rooms).model_dump(mode="json"))
+        except Exception as e:  # keep the recording rather than break the demo
+            log.warning("replay: could not plan %s again: %r", sid, e)
+            cache[sid] = None
+    got = cache[sid]
+    return result if got is None else {**result, "layout": got[0], "validation": got[1], "hero": None}
 
 
 def recording_type(rec: dict[str, Any]) -> str | None:

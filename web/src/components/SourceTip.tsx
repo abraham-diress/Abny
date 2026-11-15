@@ -9,11 +9,11 @@ export interface SourceLine {
 
 const SOURCE_STYLE: Record<Source, string> = {
   costar: "bg-sky-500/15 text-sky-700 dark:text-sky-300",
-  matterport: "bg-violet-500/15 text-violet-700 dark:text-violet-300",
-  vexcel: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300",
-  model: "bg-fuchsia-500/15 text-fuchsia-700 dark:text-fuchsia-300",
-  assumption: "bg-amber-500/15 text-amber-700 dark:text-amber-300",
-  user: "bg-zinc-500/15 text-zinc-700 dark:text-zinc-300",
+  matterport: "bg-secondary/15 text-secondary",
+  vexcel: "bg-lime-500/15 text-lime-700 dark:text-lime-300",
+  model: "bg-primary/15 text-primary",
+  assumption: "bg-tertiary/20 text-amber-700 dark:text-tertiary",
+  user: "bg-stone-500/15 text-stone-700 dark:text-stone-300",
 };
 
 export function citationLine(c: Citation): SourceLine {
@@ -60,7 +60,7 @@ export function Sourced({ label, children, lines }: { label: string; children: R
       </dd>
       <div
         role="tooltip"
-        className="invisible absolute top-full right-0 z-20 w-80 max-w-[85vw] space-y-1.5 rounded-xl border border-border bg-surface p-3 text-left text-xs opacity-0 shadow-lg transition-opacity group-focus-within:visible group-focus-within:opacity-100 group-hover:visible group-hover:opacity-100"
+        className="invisible absolute top-full right-0 z-20 w-80 max-w-[85vw] space-y-1.5 shadow-lift rounded-xl border border-border bg-surface p-3 text-left text-xs opacity-0 transition-opacity group-focus-within:visible group-focus-within:opacity-100 group-hover:visible group-hover:opacity-100"
       >
         {lines.length === 0 ? (
           <p className="text-muted">No source recorded.</p>

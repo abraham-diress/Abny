@@ -53,6 +53,13 @@ def front_zone(cx: float, cz: float, width: float, depth: float, rotation_deg: f
     return Polygon([local_to_world(cx, cz, lx, lz, rotation_deg) for lx, lz in corners])
 
 
+FLAT_MAX_HEIGHT_M = 0.05  # rugs and the like: you walk over them, so they never block or collide
+
+
+def is_flat(item: LayoutItem) -> bool:
+    return item.height_m <= FLAT_MAX_HEIGHT_M
+
+
 def item_footprint(item: LayoutItem) -> Polygon:
     return footprint(item.x_m, item.z_m, item.width_m, item.depth_m, item.rotation_deg)
 
@@ -62,9 +69,21 @@ def room_polygon(room: Room) -> Polygon:
     return poly if poly.is_valid else poly.buffer(0)
 
 
-def rooms_union(rooms: list[Room]) -> Polygon:
-    # A tiny buffer closes hairline gaps between rooms that share a wall.
-    return unary_union([room_polygon(r).buffer(0.02) for r in rooms]).buffer(-0.02)
+VOID_WORDS = ("void", "shaft", "column", "chase")
+
+
+def is_void(room: Room) -> bool:
+    """Matterport marks columns, shafts and open-to-below areas as 'Void': not floor you can use."""
+    text = f"{room.room_type or ''} {room.label or ''}".lower()
+    return any(w in text for w in VOID_WORDS)
+
+
+def rooms_union(rooms: list[Room]):
+    """Usable floor: all rooms joined, with void areas cut out.
+    A tiny buffer closes hairline gaps between rooms that share a wall."""
+    floor = unary_union([room_polygon(r).buffer(0.02) for r in rooms if not is_void(r)]).buffer(-0.02)
+    voids = [room_polygon(r) for r in rooms if is_void(r)]
+    return floor.difference(unary_union(voids)) if voids else floor
 
 
 def unit(dx: float, dz: float) -> XZ:

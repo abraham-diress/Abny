@@ -25,7 +25,7 @@ import cv2
 from agent.layout.templates import TEMPLATES
 from agent.staging import gemini_image, nova
 from agent.staging.files import ensure_dirs, mask_url_for, to_path, to_url
-from agent.staging.guide import count_visible, render_guide
+from agent.staging.guide import render_guide, view_score
 from agent.staging.score import score_image
 from shared.conventions import HEROES_DIR, RUNS_DIR
 from shared.schemas import HeroImage, ImageScore, Layout, PanoRef
@@ -37,7 +37,10 @@ MAX_ROUNDS = 2
 
 def render_hero(space_id: str, layout: Layout, style: str | None = None) -> HeroImage:
     ensure_dirs()
-    pano = pick_panorama(_panoramas(space_id), layout)
+    panos = _panoramas(space_id)
+    if not panos:  # nothing cached for this space: the top-down plan is still a picture of the layout
+        return _floorplan_hero(space_id, layout, build_prompt(layout, style))
+    pano = pick_panorama(panos, layout)
     guide_url = render_guide(layout, pano)
     prompt = build_prompt(layout, style)
     mode = os.environ.get("HERO_MODE", "inpaint").lower()
@@ -124,12 +127,32 @@ def _preview(space_id: str, layout: Layout, pano: PanoRef, guide_url: str, promp
     )
 
 
+def _floorplan_hero(space_id: str, layout: Layout, prompt: str) -> HeroImage:
+    from pipeline.queries import get_rooms  # Natnael's contract function
+
+    from agent.staging.guide import render_floorplan
+
+    plan = render_floorplan(layout, get_rooms(space_id))
+    return HeroImage(
+        hero_id=f"{layout.layout_id}-plan",
+        space_id=space_id,
+        layout_id=layout.layout_id,
+        path=plan,
+        source_pano_id="",
+        guide_path=plan,
+        model="floor-plan (no panoramas cached for this space)",
+        prompt=prompt,
+        attempt=0,
+        score=None,
+    )
+
+
 def pick_panorama(panos: list[PanoRef], layout: Layout) -> PanoRef:
-    """Face that shows the most items; furniture-free versions win ties. Skips up/down faces."""
+    """Face that shows the layout best (view_score); furniture-free versions win ties. Skips up/down faces."""
     usable = [p for p in panos if p.face not in ("up", "down")] or panos
     if not usable:
         raise ValueError(f"No panoramas for space {layout.space_id}")
-    return max(usable, key=lambda p: (count_visible(layout, p), p.defurnished))
+    return max(usable, key=lambda p: (round(view_score(layout, p), 2), p.defurnished))
 
 
 def build_prompt(layout: Layout, style: str | None) -> str:

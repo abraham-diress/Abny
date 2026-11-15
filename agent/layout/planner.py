@@ -24,10 +24,13 @@ seats (closest to the request) wins. Nothing here calls an LLM: results are dete
 from __future__ import annotations
 
 import hashlib
+from collections import Counter
 from dataclasses import dataclass, field
 
+import numpy as np
+import shapely
 from shapely.geometry import LineString, MultiPolygon, Point, Polygon
-from shapely.ops import unary_union
+from shapely.ops import polylabel, unary_union
 from shapely.prepared import prep
 
 from agent.layout.catalog import load_catalog
@@ -35,21 +38,25 @@ from agent.layout.geometry import (
     Frame,
     edges,
     facing_rotation,
+    is_void,
     footprint,
+    front_vector,
     front_zone,
     inward_normal,
+    is_flat,
     nearest_edge,
     room_polygon,
     rooms_union,
     unit,
 )
-from agent.layout.templates import BusinessTemplate, target_seats, template_for
-from agent.layout.validator import unreachable_items, validate_layout
+from agent.layout.templates import BusinessTemplate, desk_capacity, scale_to_room, target_seats, template_for
+from agent.layout.validator import entrance_zone, unreachable_items, validate_layout
 from shared.conventions import DOOR_CLEARANCE_M, MIN_AISLE_M
 from shared.schemas import Brief, CatalogItem, Inspection, Layout, LayoutItem, Room
 
 STRATEGIES = ("back-counter", "side-counter")
 GRID_STEP_M = 0.2
+MAIN_ROOM_SHARE = 0.4  # a room this share of the biggest room's area can hold the business
 ANCHOR_M2_PER_SEAT = 6.0  # floor a seat/desk needs (with aisles) before an anchor may share the open area
 EXCLUDED_ROOM_WORDS = ("bath", "restroom", "toilet", "wc", "closet", "stair", "elevator")
 
@@ -72,6 +79,8 @@ def plan_layout(
     catalog = load_catalog()
     tpl, tpl_notes = template_for(brief)
     site = analyze_site(rooms)
+    floor_m2 = rooms_union(site.floor_rooms).area
+    tpl = scale_to_room(tpl, floor_m2)  # meeting tables, phone booths, kitchenettes, storage: from the room, not the headcount
     wanted = target_seats(brief, tpl)
 
     tried = [strategy] if strategy in tpl.strategies else list(tpl.strategies)
@@ -92,6 +101,9 @@ def plan_layout(
         return (report.passed, -missing_boh, close_enough, preference, lay.seat_count)
 
     best = max(candidates, key=score)
+    cap = desk_capacity(floor_m2)
+    if tpl.business_type == "office" and cap >= 1.25 * max(best.seat_count, 1):
+        best.notes.append(f"Room to grow: this floor seats about {cap} desks comfortably; the plan has {best.seat_count} as requested.")
     if len(candidates) > 1:
         others = ", ".join(f"{c.strategy}: {c.seat_count} {tpl.seat_word}" for c in candidates if c is not best)
         best.notes.append(f"Also tried {others}.")
@@ -126,18 +138,21 @@ class Site:
 
 def analyze_site(rooms: list[Room]) -> Site:
     notes: list[str] = []
-    usable = [r for r in rooms if not _excluded(r)] or rooms
+    usable = [r for r in rooms if not _excluded(r) and not is_void(r)] or rooms
+    # The business goes in a main room: ignore small front offices/vestibules when choosing the entrance.
+    biggest = max(room_polygon(r).area for r in usable)
+    main = [r for r in usable if room_polygon(r).area >= MAIN_ROOM_SHARE * biggest]
 
-    # Entrance: exterior door > storefront windows > longest wall of the largest room.
+    # Entrance: exterior door of a main room > storefront windows > longest wall of the largest room.
     entrance = None
-    for room in usable:
+    for room in main:
         for op in room.openings:
             if op.kind == "door" and _is_exterior(op.a, op.b, room, rooms):
                 cand = (room, op.a, op.b)
                 if entrance is None or _window_len(room) > _window_len(entrance[0]):
                     entrance = cand
     if entrance is None:
-        best = max(usable, key=_window_len)
+        best = max(main, key=_window_len)
         win = [op for op in best.openings if op.kind == "window"]
         if win:
             op = max(win, key=lambda o: Point(o.a).distance(Point(o.b)))
@@ -152,6 +167,7 @@ def analyze_site(rooms: list[Room]) -> Site:
 
     front, a, b = entrance
     floor_rooms = [r for r in rooms if r.floor_index == front.floor_index]
+    solid_rooms = [r for r in floor_rooms if not is_void(r)]
     fpoly = room_polygon(front)
     mid = ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
     ea, eb = nearest_edge(fpoly, mid)
@@ -166,10 +182,14 @@ def analyze_site(rooms: list[Room]) -> Site:
     # Back room: adjacent, not a restroom, big enough for a kitchen; prefer 'kitchen'.
     back = None
     candidates = [
-        r for r in floor_rooms
+        r for r in solid_rooms
         if r.room_id != front.room_id and not _excluded(r) and room_polygon(r).area >= 6.0
         and room_polygon(r).distance(fpoly) < 0.3
     ]
+    # ...and toward the back: a side office next to the entrance is not a kitchen.
+    frame = Frame(origin=origin, t=t, n=n)
+    v_lo, v_hi = frame.depth_extent(fpoly)
+    candidates = [r for r in candidates if frame.to_local(_centroid(r))[1] > (v_lo + v_hi) / 2]
     if candidates:
         back = max(candidates, key=lambda r: (("kitchen" in (r.room_type or r.label or "").lower()), room_polygon(r).area))
 
@@ -190,7 +210,7 @@ def analyze_site(rooms: list[Room]) -> Site:
             notes.append("Doorway to the back room not marked in the scan; assumed one where the rooms meet.")
 
     windows = [LineString([o.a, o.b]) for r in floor_rooms for o in r.openings if o.kind == "window"]
-    overlap = rooms_overlap(floor_rooms)
+    overlap = rooms_overlap(solid_rooms)
     if overlap:
         notes.insert(0, f"WARNING: rooms {overlap[0]} and {overlap[1]} overlap in the data (room positions may be missing); "
                         "furniture may not line up with the 3D tour.")
@@ -198,7 +218,7 @@ def analyze_site(rooms: list[Room]) -> Site:
         floor_rooms=floor_rooms,
         front=front,
         back=back,
-        frame=Frame(origin=origin, t=t, n=n),
+        frame=frame,
         door_width=door_width,
         entrance=origin,
         back_opening=back_opening,
@@ -226,6 +246,11 @@ def _named_room(site: Site, words: tuple[str, ...]) -> Room | None:
         if r.room_id != site.front.room_id and any(w in text for w in words):
             return r
     return None
+
+
+def _centroid(room: Room) -> tuple[float, float]:
+    c = room_polygon(room).centroid
+    return (c.x, c.y)
 
 
 def _excluded(room: Room) -> bool:
@@ -297,6 +322,8 @@ class Placer:
                 if fp.intersects(p.fp) and fp.intersection(p.fp).area > 1e-4:
                     return False
                 continue
+            if is_flat(p.item):  # a rug under the spot is fine
+                continue
             if fp.intersects(p.fp) and fp.intersection(p.fp).area > 1e-4:
                 return False
             if gap > 0 and fp.distance(p.fp) < gap - 1e-6:
@@ -352,6 +379,10 @@ def _plan_one(space_id: str, site: Site, rooms: list[Room], catalog, tpl: Busine
     placer.keep_out(Polygon([frame.to_world(-hw, -0.1), frame.to_world(hw, -0.1), frame.to_world(hw, DOOR_CLEARANCE_M), frame.to_world(-hw, DOOR_CLEARANCE_M)]))
     if site.back_opening is not None:
         placer.keep_out(Point(site.back_opening).buffer(0.9))
+    # Also keep clear exactly the area the validator checks (it measures from the merged floor outline).
+    checked = entrance_zone(_layout(placer, space_id, layout_id, tpl, site, strategy, notes), site.floor_rooms, floor)
+    if checked is not None:
+        placer.keep_out(checked)
 
     v_min, v_max = frame.depth_extent(fpoly)
     service_types = [t for t in tpl.service_line if t in catalog]
@@ -375,6 +406,8 @@ def _plan_one(space_id: str, site: Site, rooms: list[Room], catalog, tpl: Busine
             boh_region = site.back_poly if site.back is not None else frame.band(fpoly, v_line + svc_depth / 2, v_max + 1)
         else:
             boh_region = site.back_poly if site.back is not None else fpoly
+            if not _place_service_on_wall(placer, site, catalog, tpl, fpoly, frame, notes):
+                notes.append("Could not fit the service counter.")
     else:  # side-counter (or no service line)
         if service_types and not _place_service_on_wall(placer, site, catalog, tpl, fpoly, frame, notes):
             notes.append("Could not fit the service counter.")
@@ -431,6 +464,9 @@ def _plan_one(space_id: str, site: Site, rooms: list[Room], catalog, tpl: Busine
             placer.remove(placer.items()[-1].item_id)
             break
 
+    _furnish_other_rooms(placer, site, catalog, tpl, wanted, blocked, notes)
+    _dress(placer, site, catalog, tpl, floor, fpoly, blocked, notes)
+    _add_rugs(placer, site, catalog, tpl)
     layout = _layout(placer, space_id, layout_id, tpl, site, strategy, notes)
 
     # Repair: drop seating the validator can't reach; if equipment is boxed in, drop the seat nearest it.
@@ -558,8 +594,8 @@ def _wall_slots(site: Site, region, span: float, prefer: str):
                     key = -d_ent
                 elif prefer == "near_entrance":
                     key = d_ent
-                elif prefer == "side_near_entrance":  # side walls first, then closest to the door
-                    key = parallel_to_entrance * 100 + d_ent
+                elif prefer == "side_near_entrance":  # closest to the door; a side wall is worth ~3 m
+                    key = d_ent + parallel_to_entrance * 3
                 else:  # side walls first, then closer to the back
                     key = parallel_to_entrance * 100 - d_ent
                 cands.append((key, x, z, t, n))
@@ -605,11 +641,29 @@ def _place_unit_on_wall(placer: Placer, site: Site, catalog, types: list[str], r
 # --------------------------------------------------------------------------- #
 
 
+SPREAD_FROM_M2 = 9.0  # floor per seat above which the seats spread out instead of huddling at the door
+SPREAD_GAIN = 0.16  # extra aisle (m) per m2 of floor per seat beyond that
+SPREAD_MAX_GAP_M = 3.2
+
+
 def _place_seating(placer: Placer, site: Site, catalog, tpl: BusinessTemplate, region, wanted: int) -> int:
+    """Seats, spread over a roomy floor (wider aisles) and packed tight on a small one. If the spread-out
+    plan can't seat everyone, it is thrown away and the tight plan used."""
     if wanted <= 0 or region is None or region.is_empty:
         return 0
+    tight = MIN_AISLE_M + 0.02
+    per_seat = region.area / wanted
+    gap = min(SPREAD_MAX_GAP_M, tight + max(0.0, per_seat - SPREAD_FROM_M2) * SPREAD_GAIN)
+    start = len(placer.placed)
+    seats = _place_seating_gap(placer, site, catalog, tpl, region, wanted, gap)
+    if gap > tight and seats < wanted:
+        del placer.placed[start:]
+        seats = _place_seating_gap(placer, site, catalog, tpl, region, wanted, tight)
+    return seats
+
+
+def _place_seating_gap(placer: Placer, site: Site, catalog, tpl: BusinessTemplate, region, wanted: int, gap: float) -> int:
     seats = 0
-    gap = MIN_AISLE_M + 0.02
     region_prep = prep(region.buffer(1e-3))
 
     # 1) Wall benches along side walls, up to ~40% of the seats (the rest go in the middle).
@@ -620,40 +674,304 @@ def _place_seating(placer: Placer, site: Site, catalog, tpl: BusinessTemplate, r
         while seats < min(wanted, bench_cap) and _place_wall_seating(placer, site, catalog, t, region, region_prep, gap):
             seats += catalog[t].seats
 
-    # 2) Free-standing sets on a grid, nearest the storefront first.
+    # 2) Free-standing sets on a grid, nearest the storefront first. A set that would overshoot the
+    #    request waits: wall seats top up first, and oversize sets only fill what the walls can't.
     frame = site.frame
     types = [t for t in tpl.seating_free if t in catalog]
-    if not types:
-        return seats
-    v0, v1 = frame.depth_extent(region if isinstance(region, Polygon) else region.convex_hull)
-    us = [frame.to_local(c)[0] for p in _polys(region) for c in p.exterior.coords]
-    u0, u1 = min(us), max(us)
-    rots = [facing_rotation(*frame.n), facing_rotation(*frame.t)]
-    v = v0 + 0.1
-    while v <= v1 and seats < wanted:
-        u = u0 + 0.1
-        while u <= u1 and seats < wanted:
-            remaining = wanted - seats
-            order = sorted(types, key=lambda t: (catalog[t].seats > remaining, -catalog[t].seats))
-            for t in order:
-                c = catalog[t]
-                placed = False
-                for rot in rots:
-                    x, z = frame.to_world(u + c.width_m / 2, v + c.depth_m / 2)
-                    fp = footprint(x, z, c.width_m, c.depth_m, rot)
-                    if placer.fits(fp, None, region_prep, gap=gap):
-                        placer.add(t, _room_at(site.floor_rooms, x, z), x, z, rot)
-                        seats += c.seats
-                        placed = True
+
+    def grid(allow_over: bool, kinds: list[str]) -> None:
+        nonlocal seats
+        v0, v1 = frame.depth_extent(region if isinstance(region, Polygon) else region.convex_hull)
+        us = [frame.to_local(c)[0] for p in _polys(region) for c in p.exterior.coords]
+        u0, u1 = min(us), max(us)
+        rots = [facing_rotation(*frame.n), facing_rotation(*frame.t)]
+        v = v0 + 0.1
+        while v <= v1 and seats < wanted:
+            u = u0 + 0.1
+            while u <= u1 and seats < wanted:
+                remaining = wanted - seats
+                order = sorted(kinds, key=lambda t: (catalog[t].seats > remaining, -catalog[t].seats))
+                for t in order:
+                    c = catalog[t]
+                    if c.seats > remaining and not allow_over:
+                        continue
+                    placed = False
+                    for rot in rots:
+                        x, z = frame.to_world(u + c.width_m / 2, v + c.depth_m / 2)
+                        fp = footprint(x, z, c.width_m, c.depth_m, rot)
+                        if placer.fits(fp, None, region_prep, gap=gap):
+                            placer.add(t, _room_at(site.floor_rooms, x, z), x, z, rot)
+                            seats += c.seats
+                            placed = True
+                            break
+                    if placed:
                         break
-                if placed:
-                    break
-            u += GRID_STEP_M
-        v += GRID_STEP_M
-    for t in tpl.seating_wall:
-        while t in catalog and seats < wanted and _place_wall_seating(placer, site, catalog, t, region, region_prep, gap):
-            seats += catalog[t].seats
+                u += GRID_STEP_M
+            v += GRID_STEP_M
+
+    def wall_top_up() -> None:
+        nonlocal seats
+        for t in tpl.seating_wall:
+            while t in catalog and seats < wanted and _place_wall_seating(placer, site, catalog, t, region, region_prep, gap):
+                seats += catalog[t].seats
+
+    if types:
+        grid(allow_over=False, kinds=types)
+    wall_top_up()
+    if types and seats < wanted:  # walls full: wall seats may stand free, then a set may round up
+        grid(allow_over=False, kinds=types + [t for t in tpl.seating_wall if t in catalog and t not in types])
+        grid(allow_over=True, kinds=types)
     return seats
+
+
+SKIP_ROOM_WORDS = ("bath", "restroom", "toilet", "wc", "stair", "elevator", "hall", "corridor", "lobby", "vestibule", "entry")
+
+
+def _furnish_other_rooms(placer: Placer, site: Site, catalog, tpl: BusinessTemplate, wanted: int, blocked, notes: list[str]) -> None:
+    """Give the rooms the main plan left empty a use, so the tour doesn't show a row of bare rooms.
+    Offices: private offices take desks while the request isn't met, then bigger rooms become a second
+    meeting room, medium ones a lounge, closets storage. Bakeries/cafés: spare back rooms become dry
+    storage (no extra seats: bakery seats are customer seats). Every piece is kept only if everything
+    stays reachable."""
+    used = {i.room_id for i in placer.items()}
+    rooms = []
+    for r in site.floor_rooms:
+        text = f"{r.room_type or ''} {r.label or ''}".lower()
+        if r.room_id in used or is_void(r) or any(w in text for w in SKIP_ROOM_WORDS):
+            continue
+        poly = room_polygon(r)
+        if poly.area >= 2.5:
+            rooms.append((poly.area, r, poly, "closet" in text))
+    rooms.sort(key=lambda x: -x[0])
+    if not rooms:
+        return
+
+    def keep(add) -> bool:
+        before = blocked()
+        n = len(placer.items())
+        if not add() or len(placer.items()) == n:
+            return False
+        if blocked() - before:
+            placer.remove(placer.items()[-1].item_id)
+            return False
+        return True
+
+    def seats() -> int:
+        return sum(i.seats for i in placer.items())
+
+    office = tpl.business_type == "office"
+    furnished = []
+    lounges = 0
+    for area, room, poly, closet in rooms:
+        name = (room.label or room.room_type or "").strip()
+        label = name if name and name.lower() not in ("other", "unknown", "room") else f"{area:.0f} m² room"
+        if office and not closet and seats() < wanted and "single_desk" in catalog and area >= 6:
+            added = 0
+            while added < min(4, int(area // 6)) and seats() < wanted and keep(
+                    lambda: _place_on_walls(placer, site, catalog, "single_desk", poly, prefer="far_from_entrance", avoid_windows=False)):
+                added += 1
+            if added:
+                furnished.append(f"{label}: {added} desk{'s' if added > 1 else ''}")
+                continue
+        if office and not closet and area >= 12 and "meeting_table" in catalog and keep(lambda: _place_free(placer, site, catalog, "meeting_table", poly)):
+            furnished.append(f"{label}: meeting room")
+        elif office and not closet and area >= 6 and lounges == 0 and "sofa" in catalog and keep(
+                lambda: _place_on_walls(placer, site, catalog, "sofa", poly, prefer="far_from_entrance")):
+            lounges += 1
+            furnished.append(f"{label}: lounge")
+        elif office and not closet and area >= 4 and "phone_booth" in catalog and len(furnished) % 2 == 0 and keep(
+                lambda: _place_on_walls(placer, site, catalog, "phone_booth", poly, prefer="far_from_entrance")):
+            furnished.append(f"{label}: focus room")
+        else:
+            store = "storage_cabinet" if office else "retail_shelf"
+            if store in catalog and keep(lambda: _place_on_walls(placer, site, catalog, store, poly, prefer="far_from_entrance")):
+                furnished.append(f"{label}: storage")
+    if furnished:
+        notes.append("Other rooms: " + "; ".join(furnished) + ".")
+
+
+# --------------------------------------------------------------------------- #
+# Dressing: make a big floor look lived in
+# --------------------------------------------------------------------------- #
+
+DEAD_R_M = 2.5  # a spot farther than this from any furniture (and DEAD_WALL_M from a wall) counts as empty floor
+DEAD_WALL_M = 1.0
+DRESS_MAX_FILL_STEPS = 24
+SPREAD_GRID_M = 0.4
+SPREAD_TRIES = 500  # candidate poses tried per piece, best first
+
+
+def _furniture_union(placer: Placer):
+    return unary_union([p.fp for p in placer.placed if p.item is not None and not is_flat(p.item)] or [Polygon()])
+
+
+def empty_floor(placer: Placer, floor) -> object:
+    """The part of the floor that is more than DEAD_R_M from any furniture and DEAD_WALL_M from a wall."""
+    return floor.difference(unary_union([_furniture_union(placer).buffer(DEAD_R_M), floor.boundary.buffer(DEAD_WALL_M)]))
+
+
+def _keep_if_reachable(placer: Placer, blocked, add) -> bool:
+    """Run `add()` (which places one item); undo it if it didn't place or it cuts anyone off."""
+    before = blocked()
+    n = len(placer.items())
+    if not add() or len(placer.items()) == n:
+        return False
+    if blocked() - before:
+        placer.remove(placer.items()[-1].item_id)
+        return False
+    return True
+
+
+def _place_spread(placer: Placer, site: Site, catalog, item_type: str, region, mode: str, focus: Point | None = None) -> bool:
+    """Place one dressing piece where the floor is emptiest (or, with `focus`, nearest that point).
+    mode "wall": back to a real wall, like a bookshelf. mode "free": standing in the open with a walkway all round."""
+    c = catalog[item_type]
+    occupied = _furniture_union(placer)
+    has_furniture = not occupied.is_empty
+
+    def key(xs: np.ndarray, zs: np.ndarray) -> np.ndarray:
+        """Lower is better: closeness to the focus, else how far from existing furniture (negated)."""
+        pts = shapely.points(xs, zs)
+        if focus is not None:
+            return shapely.distance(pts, focus)
+        return -shapely.distance(pts, occupied) if has_furniture else np.zeros(len(xs))
+
+    if mode == "wall":
+        tall = c.height_m > 1.1
+        windows = unary_union([w.buffer(0.35) for w in site.windows]) if tall and site.windows else None
+        region_prep = prep(region.buffer(1e-3))
+        slots = list(_wall_slots(site, region, c.width_m, "far_from_entrance"))
+        if not slots:
+            return False
+        probe = np.array([(wx + n[0] * 1.2, wz + n[1] * 1.2) for wx, wz, _, n in slots])
+        order = np.argsort(key(probe[:, 0], probe[:, 1]))[:SPREAD_TRIES]
+        for idx in order:
+            wx, wz, _, n = slots[idx]
+            rot = facing_rotation(*n)
+            x, z = wx + n[0] * (c.depth_m / 2 + 0.01), wz + n[1] * (c.depth_m / 2 + 0.01)
+            fp = footprint(x, z, c.width_m, c.depth_m, rot)
+            if windows is not None and fp.intersects(windows):
+                continue
+            if placer.fits(fp, front_zone(x, z, c.width_m, c.depth_m, rot, c.clearance_front_m), region_prep):
+                placer.add(item_type, _room_at(site.floor_rooms, x, z), x, z, rot)
+                return True
+        return False
+
+    gap = max(MIN_AISLE_M + 0.02, c.clearance_front_m)  # a table-tennis table needs its play space all round
+    inner = region.buffer(-gap * 0.6)
+    if inner.is_empty:
+        return False
+    minx, minz, maxx, maxz = inner.bounds
+    gx, gz = np.meshgrid(np.arange(minx, maxx, SPREAD_GRID_M), np.arange(minz, maxz, SPREAD_GRID_M))
+    gx, gz = gx.ravel(), gz.ravel()
+    inside = shapely.contains_xy(inner, gx, gz)
+    gx, gz = gx[inside], gz[inside]
+    if len(gx) == 0:
+        return False
+    if has_furniture:  # a centre closer than (half the narrow side + the walkway) to something can't fit: skip those up front
+        far_enough = shapely.distance(shapely.points(gx, gz), occupied) >= min(c.width_m, c.depth_m) / 2 + gap - 0.05
+        gx, gz = gx[far_enough], gz[far_enough]
+        if len(gx) == 0:
+            return False
+    region_prep = prep(inner.buffer(1e-3))
+    rots = [facing_rotation(*site.frame.n), facing_rotation(*site.frame.t), facing_rotation(*(-v for v in site.frame.n)), facing_rotation(*(-v for v in site.frame.t))]
+    for idx in np.argsort(key(gx, gz))[:SPREAD_TRIES]:
+        x, z = float(gx[idx]), float(gz[idx])
+        for rot in rots:
+            fp = footprint(x, z, c.width_m, c.depth_m, rot)
+            if placer.fits(fp, front_zone(x, z, c.width_m, c.depth_m, rot, c.clearance_front_m), region_prep, gap=gap):
+                placer.add(item_type, _room_at(site.floor_rooms, x, z), x, z, rot)
+                return True
+    return False
+
+
+def _dress(placer: Placer, site: Site, catalog, tpl: BusinessTemplate, floor, fpoly: Polygon, blocked, notes: list[str]) -> None:
+    """A floor much bigger than the request would otherwise be mostly bare. First add the pieces such a floor
+    really has (counts grow with the area: lounge corners, huddle tables, a coffee bar, shelves, plants), each
+    spread to wherever the floor is emptiest; then fill any big empty patches that are left. Pieces seat nobody,
+    never move a desk, and are kept only if everyone can still reach everything."""
+    if not tpl.dress_program and not tpl.dress_fill_large and not tpl.dress_fill_small:
+        return
+    region = floor if tpl.dress_whole_floor else fpoly
+    unusable = [room_polygon(r) for r in site.floor_rooms if _excluded(r) or is_void(r)]
+    if unusable:
+        region = region.difference(unary_union(unusable))
+    if region.is_empty or floor.is_empty:
+        return
+
+    def fill() -> float:
+        return _furniture_union(placer).area / max(floor.area, 1e-9)
+
+    placed: Counter = Counter()
+
+    def put(item_type: str, mode: str, focus: Point | None = None) -> bool:
+        if item_type not in catalog:
+            return False
+        if _keep_if_reachable(placer, blocked, lambda: _place_spread(placer, site, catalog, item_type, region, mode, focus)):
+            placed[item_type] += 1
+            return True
+        return False
+
+    # Zones: social pieces gather in the biggest empty patch, work pieces next to the desks.
+    anchors: dict[str, Point] = {}
+
+    def anchor(group: str) -> Point | None:
+        if group not in anchors:
+            if group == "social":
+                parts = _polys(empty_floor(placer, floor))
+                big = max(parts, key=lambda p: p.area, default=None)
+                anchors[group] = polylabel(big, tolerance=0.3) if big is not None else None
+            elif group == "work":
+                desks = [Point(i.x_m, i.z_m) for i in placer.items() if i.seats > 0]
+                anchors[group] = unary_union(desks).centroid if desks else None
+        return anchors.get(group)
+
+    for item_type, per_m2, cap, mode, group in tpl.dress_program:
+        for _ in range(min(cap, int(region.area // per_m2))):
+            if fill() >= tpl.dress_fill_cap or not put(item_type, mode, anchor(group)):
+                break
+
+    # Big empty patches left? Put a gathering spot in the middle of each, smaller voids get plants.
+    skip = Polygon()
+    for step in range(DRESS_MAX_FILL_STEPS):
+        if fill() >= tpl.dress_fill_cap:
+            break
+        empty = empty_floor(placer, floor)
+        if not skip.is_empty:
+            empty = empty.difference(skip)
+        parts = [p for p in _polys(empty) if p.area >= 3.0]
+        if not parts or sum(p.area for p in _polys(empty)) <= tpl.dress_target_empty * floor.area:
+            break
+        piece = max(parts, key=lambda p: p.area)
+        pole = polylabel(piece, tolerance=0.3)
+        radius = piece.boundary.distance(pole)  # how deep inside the empty area this spot is
+        kinds = tpl.dress_fill_large if radius >= 1.0 else tpl.dress_fill_small
+        if not kinds or not any(put(kinds[(step + k) % len(kinds)], "free", pole) for k in range(len(kinds))):
+            skip = skip.union(pole.buffer(2.5))
+        # ...and an unfilled spot is skipped so the loop moves on to the next-biggest patch.
+
+    if placed:
+        notes.append("Dressed the floor: " + ", ".join(f"{n}× {catalog[t].label.lower()}" for t, n in placed.items()) + ".")
+
+
+def _add_rugs(placer: Placer, site: Site, catalog, tpl: BusinessTemplate) -> None:
+    """A rug under each lounge, huddle table and meeting table: colour on the floor that makes a spot read as a
+    zone. Rugs are flat (nothing collides with them) but must lie inside the floor and clear of the entrance."""
+    for piece, rug, shift in tpl.dress_rugs:
+        if rug not in catalog:
+            continue
+        c = catalog[rug]
+        for item in [i for i in placer.items() if i.item_type == piece]:
+            fx, fz = front_vector(item.rotation_deg)
+            x, z = item.x_m + fx * shift, item.z_m + fz * shift
+            fp = footprint(x, z, c.width_m, c.depth_m, item.rotation_deg)
+            if not placer.floor_prep.contains(fp):
+                continue
+            if any(q.item is None and fp.intersects(q.fp) for q in placer.placed):  # the entrance / doorway keep-outs
+                continue
+            if any(q.item is not None and q.item.item_type == rug and fp.intersects(q.fp) and fp.intersection(q.fp).area > 0.5 for q in placer.placed):
+                continue
+            placer.add(rug, _room_at(site.floor_rooms, x, z), x, z, item.rotation_deg)
 
 
 def _place_free(placer: Placer, site: Site, catalog, item_type: str, region) -> bool:
@@ -746,7 +1064,7 @@ def _segments(geom) -> list[LineString]:
 
 def _room_at(rooms: list[Room], x: float, z: float) -> str:
     p = Point(x, z)
-    best = min(rooms, key=lambda r: room_polygon(r).distance(p))
+    best = min([r for r in rooms if not is_void(r)] or rooms, key=lambda r: room_polygon(r).distance(p))
     return best.room_id
 
 
