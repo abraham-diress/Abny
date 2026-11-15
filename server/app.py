@@ -16,7 +16,7 @@ import time
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from agent import config
@@ -30,6 +30,7 @@ from shared.schemas import (
     CreateRunRequest,
     CreateRunResponse,
     FeedbackRequest,
+    Room,
     RunStatus,
     Space,
 )
@@ -48,6 +49,12 @@ def _run_or_404(run_id: str):
     if not run:
         raise HTTPException(404, f"unknown run {run_id}")
     return run
+
+
+@app.get("/", include_in_schema=False)
+def root() -> RedirectResponse:
+    """The API has no page of its own; the website is the Next.js app on port 3000."""
+    return RedirectResponse("/docs")
 
 
 @app.get("/api/health")
@@ -128,6 +135,14 @@ async def run_events(run_id: str, request: Request, after: int | None = None, fo
 def space(space_id: str) -> Space:
     try:
         return P.get_space(space_id)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(404, f"unknown space {space_id}: {e}") from e
+
+
+@app.get("/api/spaces/{space_id}/rooms", response_model=list[Room])
+def space_rooms(space_id: str) -> list[Room]:
+    try:
+        return P.get_rooms(space_id)
     except Exception as e:  # noqa: BLE001
         raise HTTPException(404, f"unknown space {space_id}: {e}") from e
 

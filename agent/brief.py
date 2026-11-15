@@ -49,7 +49,9 @@ _SYSTEM = (
     "Only fill what the owner actually said or clearly implied; leave everything else null/empty. "
     "Money is USD per month (convert '$72k/year' to 6000). Sizes are square feet (1 m² = 10.7639 sqft). "
     "Cities: only 'Houston' or 'Los Angeles' (LA, L.A. -> 'Los Angeles'); anything else -> null. "
-    "Requirements like 'needs parking' go in must_haves; 'ideally'/'would be nice' go in nice_to_haves. "
+    "Requirements like 'needs parking', 'near transit' or 'with natural light' go in must_haves; "
+    "'ideally'/'would be nice' go in nice_to_haves. area_hint is only a neighborhood or street name "
+    "(e.g. 'Montrose', 'downtown'), never a feature like transit or parking. "
     "Offices (a team, employees, desks, headquarters, workspace) -> business_type 'office' and the headcount "
     "('25-person team', 'team of 25') goes in seats_wanted."
 )
@@ -78,6 +80,18 @@ def _parse_llm(text: str) -> Brief:
     for f in ("seats_wanted", "max_rent_month", "sqft_min", "sqft_max", "city"):
         if getattr(b, f) is None and getattr(rules, f) is not None:
             setattr(b, f, getattr(rules, f))
+    # Requirements: the rule parser's names are the canonical ones the ranker scores, so they win;
+    # anything extra the LLM understood is kept.
+    for name in rules.must_haves:
+        if name in b.nice_to_haves:
+            b.nice_to_haves.remove(name)
+        if name not in b.must_haves:
+            b.must_haves.append(name)
+    for name in rules.nice_to_haves:
+        if name not in b.must_haves and name not in b.nice_to_haves:
+            b.nice_to_haves.append(name)
+    if b.area_hint and any(re.search(rx, b.area_hint, re.I) for rx in _FEATURES.values()):
+        b.area_hint = rules.area_hint  # the LLM mistook a feature ("near transit") for a place
     return b
 
 

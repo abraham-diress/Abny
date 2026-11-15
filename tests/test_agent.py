@@ -99,3 +99,28 @@ def test_office_round():
 def test_bakery_never_gets_office_spaces():
     ctx, _ = _run()
     assert ctx.results and all("office" not in (r.space.property_type or "").lower() for r in ctx.results)
+
+
+def test_inspector_survives_vision_error(monkeypatch, tmp_path):
+    """Quota/billing errors from the vision model degrade to a labelled result, never a failed space."""
+    from agent.tools import inspector
+
+    monkeypatch.setattr("agent.llm.llm_available", lambda: True)
+    monkeypatch.setattr(inspector, "_ask_vision", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("403 billing")))
+    img = tmp_path / "face.jpg"
+    img.write_bytes(b"jpg")
+    monkeypatch.setattr(inspector, "_local_path", lambda pano: img)
+    insp = inspector.inspect_space("sample-hou-01")
+    assert any("vision model error" in n for n in insp.notes)
+
+
+def test_fitout_prefers_spaces_with_photos(monkeypatch):
+    from agent.tools import funnel
+
+    ctx = RunContext(brief=parse_brief_rules("bakery in Houston, 20 seats, under $6k"), sink=lambda e: None)
+    funnel.write_brief(ctx)
+    funnel.search_spaces(ctx)
+    funnel.rank_neighborhoods(ctx)
+    last = ctx.shortlist[-1]
+    monkeypatch.setattr(funnel, "has_photos", lambda sid: sid == last)
+    assert funnel.select_for_fitout(ctx, top_n=2)[0] == last

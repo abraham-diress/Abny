@@ -199,13 +199,24 @@ def _insp_line(i, business_type: str = "bakery") -> str:
     return f"has {', '.join(yes) or 'none of the checklist'}; {tail}"
 
 
+def has_photos(space_id: str) -> bool:
+    """True if at least one of the space's scan photos is on disk (vision, staging and the tour need them)."""
+    from agent.tools.inspector import _local_path
+
+    try:
+        return any(_local_path(p).is_file() for p in P.get_panoramas(space_id))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def select_for_fitout(ctx: RunContext, top_n: int | None = None) -> list[str]:
     """Re-rank the shortlist with inspections and pick the spaces worth the expensive fit-out."""
     top_n = top_n or config.FUNNEL_FIT_TOP
     ids = [i for i in ctx.active_ids(ctx.shortlist) if i not in ctx.failures]
-    scored = sorted(((score_space(ctx.brief, ctx.space(i), ctx.neighborhoods.get(i), ctx.inspections.get(i))[0], i)
+    scored = sorted(((has_photos(i) if config.PREFER_PHOTOS else True,
+                      score_space(ctx.brief, ctx.space(i), ctx.neighborhoods.get(i), ctx.inspections.get(i))[0], i)
                      for i in ids), reverse=True)
-    ctx.fit_list = [i for _, i in scored[:top_n]]
+    ctx.fit_list = [i for *_, i in scored[:top_n]]
     return ctx.fit_list
 
 
@@ -352,7 +363,8 @@ def publish_results(ctx: RunContext, space_ids: list[str] | None = None, notes: 
             layout=ctx.layouts.get(sid), validation=ctx.validations.get(sid), hero=ctx.heroes.get(sid),
             numbers=ctx.numbers.get(sid), broker_email=ctx.emails.get(sid)))
     order = {"fitted": 0, "inspected": 1, "screened": 2, "failed": 3}
-    results.sort(key=lambda r: (order[r.status], -r.rank_score))
+    photos = {r.space.space_id: (has_photos(r.space.space_id) if config.PREFER_PHOTOS else True) for r in results}
+    results.sort(key=lambda r: (order[r.status], not photos[r.space.space_id], -r.rank_score))
     for n, r in enumerate(results, start=1):
         r.rank = n
     ctx.results = results
