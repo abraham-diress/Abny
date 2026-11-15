@@ -1,8 +1,8 @@
-# Hestia
+# Abny
 
 **See your business in a real vacant space before you sign the lease.**
 
-A small-business owner says what they need ("second bakery location in Houston, ~20 seats, under $6k/month, needs parking"). Hestia's AI agent searches real vacant commercial spaces (CoStar listings and Matterport 3D scans, plus Vexcel aerial imagery), inspects the best ones, **places their business inside the real 3D tour**, renders a photorealistic "this is your bakery" image, and works out rent, fit-out cost and break-even. Every number links to its source.
+A small-business owner says what they need ("second bakery location in Houston, ~20 seats, under $6k/month, needs parking"). Abny's AI agent searches real vacant commercial spaces (CoStar listings and Matterport 3D scans, plus Vexcel aerial imagery), inspects the best ones, **places their business inside the real 3D tour**, renders a photorealistic "this is your bakery" image, and works out rent, fit-out cost and break-even. Every number links to its source.
 
 The same engine also fits out **offices** ("office for a 25-person team in downtown LA, near transit, under $20k/month"): desks, meeting tables and a reception desk in the real 3D tour, with cost per desk instead of break-even. See [Business types](#business-types-bakery-first-office-second).
 
@@ -115,7 +115,7 @@ Vexcel props/aerials ────┘   (data/, gitignored)          ─► hero 
 ## 4. Quick start
 
 ```bash
-git clone https://github.com/abraham-diress/hestia.git && cd hestia
+git clone https://github.com/abraham-diress/Abny.git && cd Abny
 cp .env.example .env                     # fill in keys from /costar-keys, AWS, etc.
 
 # Python (3.11+). Install base + the extras for your role:
