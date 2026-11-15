@@ -271,3 +271,23 @@ def test_pack_demo(sample_db, tmp_path, monkeypatch):
     assert demo_models and pano_models <= demo_models
     assert all(n.startswith("data/media/") for n in names - {"HESTIA_DEMO_DATA_README.txt", "data/hestia.duckdb"})
     assert "sample-hou-01" in z.read("HESTIA_DEMO_DATA_README.txt").decode()
+
+
+def test_query_spaces_cached_only_one_per_scan(sample_db, monkeypatch):
+    from pipeline.db import connect
+    from pipeline.queries import query_spaces
+
+    brief = Brief(business_type="bakery", city="Houston")
+    ids = [s.space_id for s in query_spaces(brief)]
+    a, b, c = ids[:3]
+    with connect(read_only=False) as con:  # b shares a's building scan; c's photos were never cached
+        con.execute("UPDATE spaces SET matterport_model_id = (SELECT matterport_model_id FROM spaces WHERE space_id = ?) "
+                    "WHERE space_id = ?", [a, b])
+        con.execute("DELETE FROM mp_panos WHERE model_id = (SELECT matterport_model_id FROM spaces WHERE space_id = ?)", [c])
+
+    got = [s.space_id for s in query_spaces(brief)]
+    assert len({a, b} & set(got)) == 1 and c not in got
+    assert len({s.matterport_model_id for s in query_spaces(brief)}) == len(got)
+
+    monkeypatch.setenv("HESTIA_CACHED_ONLY", "0")
+    assert {a, b, c} <= {s.space_id for s in query_spaces(brief)}

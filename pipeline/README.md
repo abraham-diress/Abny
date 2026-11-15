@@ -40,6 +40,10 @@ Notes for callers:
   `openings`, `ceiling_m` from `room.ceiling`, `room_type` from Matterport's classifier (e.g. "Kitchen"). Everything
   is converted to **y-up** (`x`, `z` = −API `y`). Rooms without a boundary fall back to rectangles (`approx_rect`).
 - `get_panoramas`: cube faces (2048 px, 90° FOV), furniture-free variants first.
+- `query_spaces` searches **only spaces with cached 360° photos, one space per scan** (`HESTIA_CACHED_ONLY`, on by
+  default), so every result can be inspected, staged and toured. With the demo zip that is the 5 demo spaces.
+  `count_spaces()` still counts the whole market (the funnel's "total"). `HESTIA_CACHED_ONLY=0` searches every
+  scanned space (results without photos get no inspection or hero image).
 - `Space.citations` has a `has_scan` citation whose note says whether the scan is **of this suite**, **attached to
   the listing**, or **of the building (may be a different suite)**. Don't present a building scan as the suite.
 - `estimate_costs` also puts `breakeven_months_base` (the headline number) and `revenue_month_base` in `assumptions`.

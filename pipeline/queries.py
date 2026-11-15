@@ -21,6 +21,19 @@ from pipeline.db import bbox, connect, haversine_m, rows, table_exists
 
 REQUIRE_SCAN = os.getenv("HESTIA_REQUIRE_SCAN", "1") != "0"
 
+# Scans with at least one complete 360° photo cached on disk (all 4 side faces of one scan position).
+CACHED_MODELS_SQL = """SELECT DISTINCT model_id FROM (
+    SELECT model_id, scan_id FROM mp_panos WHERE face IN ('front', 'right', 'back', 'left')
+    GROUP BY model_id, scan_id HAVING count(DISTINCT face) = 4)"""
+SCAN_LEVEL_RANK = {"space": 0, "listing": 1, "property": 2}
+
+
+def cached_only() -> bool:
+    """HESTIA_CACHED_ONLY (default on): search only spaces whose scan has cached 360° photos, one space
+    per scan. Without photos a space gets no inspection, hero image or before/after, so it shouldn't win
+    a demo. Set HESTIA_CACHED_ONLY=0 to search every scanned space."""
+    return os.getenv("HESTIA_CACHED_ONLY", "1") != "0"
+
 TENANT_RADIUS_M = 400
 COMPETITOR_RADIUS_M = 800
 RESIDENTIAL_RADIUS_M = 800
@@ -145,13 +158,20 @@ def query_spaces(brief: Brief, limit: int = 200) -> list[Space]:
 
     Space type follows brief.business_type: office -> office spaces; everything else -> retail/restaurant.
     For offices, seats_wanted is the desk count (sized at ~175 sqft per desk).
+    With cached_only() (the default), only spaces with cached photos are returned, one per scan: several
+    suites often share one building scan, and showing that tour five times would be misleading.
     """
     where, params = ["lat IS NOT NULL", "lon IS NOT NULL"], []
     if REQUIRE_SCAN:
         where.append("has_scan")
+    one_per_scan = False
     with connect() as con:  # scans that turned out to be apartment units can't show a storefront
         if table_exists(con, "mp_model_info"):
             where.append("matterport_model_id NOT IN (SELECT model_id FROM mp_model_info WHERE is_residential)")
+        # Skipped when nothing is cached yet (fresh database), so the search never comes back empty for that.
+        if cached_only() and table_exists(con, "mp_panos") and con.execute(CACHED_MODELS_SQL + " LIMIT 1").fetchone():
+            where.append(f"matterport_model_id IN ({CACHED_MODELS_SQL})")
+            one_per_scan = True
     if brief.city:
         where.append("city = ?")
         params.append(brief.city)
@@ -184,9 +204,21 @@ def query_spaces(brief: Brief, limit: int = 200) -> list[Space]:
     order_terms.append("CASE scan_level WHEN 'space' THEN 0 WHEN 'listing' THEN 0.05 ELSE 0.15 END")
     order = " + ".join(order_terms) or "0"
 
-    sql = f"SELECT * FROM spaces WHERE {' AND '.join(where)} ORDER BY ({order}), space_id LIMIT {int(limit)}"
+    sql = f"SELECT * FROM spaces WHERE {' AND '.join(where)} ORDER BY ({order}), space_id"
     with connect() as con:
-        return [_space_from_row(r) for r in rows(con, sql, params)]
+        if not one_per_scan:
+            return [_space_from_row(r) for r in rows(con, sql + f" LIMIT {int(limit)}", params)]
+        recs = rows(con, sql, params)
+        aerial = ({r[0] for r in con.execute("SELECT space_id FROM vx_props WHERE status = 'ok'").fetchall()}
+                  if table_exists(con, "vx_props") else set())
+    # One space per scan: the one with aerial data, then the suite the scan is of, then the best fit.
+    best: dict[str, tuple] = {}
+    for i, r in enumerate(recs):
+        key = (r["space_id"] not in aerial, SCAN_LEVEL_RANK.get(r.get("scan_level") or "", 3), i)
+        if r["matterport_model_id"] not in best or key < best[r["matterport_model_id"]][0]:
+            best[r["matterport_model_id"]] = (key, r)
+    keep = sorted(best.values(), key=lambda kr: kr[0][2])  # back in best-fit order
+    return [_space_from_row(r) for _, r in keep[: int(limit)]]
 
 
 def get_space(space_id: str) -> Space:
