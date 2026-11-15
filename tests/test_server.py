@@ -124,3 +124,8 @@ def test_replay_replan_plans_again_and_drops_the_old_photo(monkeypatch):
     assert runs._replan(recorded, brief, cache)["layout"] == out["layout"]  # cached per space
     no_layout = {"space": {"space_id": "S"}, "layout": None}
     assert runs._replan(no_layout, brief, cache) is no_layout  # nothing to re-plan stays as recorded
+
+def test_space_rooms(client):
+    r = client.get("/api/spaces/sample-hou-01/rooms")
+    assert r.status_code == 200 and r.json() and "polygon_m" in r.json()[0]
+    assert client.get("/api/spaces/nope/rooms").status_code == 404

@@ -23,12 +23,11 @@ def test_deep_agent_stream_to_events(sample_db):
         _call("write_todos", {"todos": [{"content": "Scout", "status": "in_progress"},
                                         {"content": "Publish", "status": "pending"}]}, 1),
         _call("task", {"subagent_type": "scout", "description": "Find and rank spaces"}, 2),
-        _call("search_spaces", {}, 3),                       # inside scout
-        _call("rank_neighborhoods", {"top_n": 5}, 4),        # inside scout
+        _call("find_shortlist", {"top_n": 5}, 3),            # inside scout
         AIMessage(content="Shortlisted 5 spaces."),          # scout's final answer
         _call("pick_fitout_spaces", {"top_n": 3}, 5),
         _call("task", {"subagent_type": "designer", "description": "Layouts for the top 3"}, 6),
-        _call("design_layouts", {"space_ids": ["sample-hou-01", "sample-hou-02", "sample-hou-03"]}, 7),
+        _call("design_layouts", {"space_ids": ["sample-hou-01", "sample-hou-02", "sample-hou-03", "HTX-00589"]}, 7),
         AIMessage(content="All valid."),
         _call("publish_results", {"space_ids": ["sample-hou-01", "sample-hou-02", "sample-hou-03"],
                                   "reasons": {"sample-hou-01": "Best storefront"}}, 8),

@@ -107,8 +107,19 @@ def inspect_space(space_id: str, business_type: str = "bakery") -> Inspection:
 
     measured_ceiling, ceiling_cite = _measured_ceiling(space_id)
 
-    if not images or not llm_available():
-        reason = "no cached panoramas on disk" if not images else "no LLM credentials"
+    report, reason = None, ""
+    if not images:
+        reason = "no cached panoramas on disk"
+    elif not llm_available():
+        reason = "no LLM credentials"
+    else:
+        try:
+            report = _ask_vision([f for _, f in images], business_type)
+        except Exception as e:  # noqa: BLE001 - quota/billing/network: degrade, don't fail the space
+            log.warning("vision failed for %s: %s", space_id, e)
+            reason = f"vision model error: {type(e).__name__}"
+
+    if report is None:
         if P.using_sample_data() or space_id.startswith("sample-"):  # synthetic spaces (ours or the sample DB)
             from agent import samples
 
@@ -123,7 +134,6 @@ def inspect_space(space_id: str, business_type: str = "bakery") -> Inspection:
             citations=[ceiling_cite] if ceiling_cite else [],
         )
 
-    report = _ask_vision([f for _, f in images], business_type)
     used = [p for p, _ in images]
     insp = Inspection(space_id=space_id, pano_ids=[p.pano_id for p in used],
                       confidence=report.confidence, notes=report.notes[:4])

@@ -43,6 +43,8 @@ FAST_MODEL_ID = os.getenv("FAST_MODEL_ID", "")
 FUNNEL_FILTER_LIMIT = _int("FUNNEL_FILTER_LIMIT", C.FUNNEL_FILTER_LIMIT)
 FUNNEL_INSPECT_TOP = _int("FUNNEL_INSPECT_TOP", C.FUNNEL_INSPECT_TOP)
 FUNNEL_FIT_TOP = _int("FUNNEL_FIT_TOP", C.FUNNEL_FIT_TOP)
+# Fit out spaces with downloaded scan photos first: only those can be inspected, staged and toured.
+PREFER_PHOTOS = os.getenv("PREFER_PHOTOS", "1") != "0"
 
 TOOL_TIMEOUT_S = _float("TOOL_TIMEOUT_S", 90.0)  # per single contract-function call
 HERO_TIMEOUT_S = _float("HERO_TIMEOUT_S", 180.0)  # image generation is slower
@@ -51,7 +53,7 @@ DEMO_SPEED = _float("DEMO_SPEED", 1.0)  # >1 replays recorded runs faster
 DEMO_RUN_FILE = os.getenv("DEMO_RUN_FILE", "")  # force one recording for every replay
 # Business types to replay from a recording even when DEMO=0, e.g. DEMO_REPLAY=office:
 # the bakery runs live on stage while "click the office brief" replays (README demo script, step 5).
+DEMO_REPLAY = {t.strip() for t in os.getenv("DEMO_REPLAY", "").split(",") if t.strip()}
 # DEMO_REPLAN=1: a replay keeps the recorded search but plans every layout again with the current planner
 # (and drops the recorded photo, which shows the old layout). Use it until a fresh run with photos is recorded.
 DEMO_REPLAN = os.getenv("DEMO_REPLAN", "0").strip().lower() in {"1", "true", "yes"}
-DEMO_REPLAY = {t.strip() for t in os.getenv("DEMO_REPLAY", "").split(",") if t.strip()}
