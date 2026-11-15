@@ -8,10 +8,14 @@ Every model:
 * faces +z (its "front": doors, glass, the customer side).
 So the frontend places it at (x_m, floor_y, z_m) and rotates it by rotation_deg about +y.
 
-Realistic parts (chairs, café tables, bench, sofa, cabinet, shelves, cash register, pastries,
-plants) come from CC0 Poly Haven models: run `python assets/fetch_cc0.py` first (downloads to the
-gitignored data/cc0/). Without them every item falls back to simple box geometry. Kitchen
-equipment, desks and counters stay simple shapes (there are no good CC0 models for them).
+Realistic models come from two free sources, downloaded to the gitignored data/ folder:
+* Sketchfab (CC-BY, credits in assets/CREDITS.md): chairs, desks, laptops, monitors, counters, the
+  pastry case, espresso machine, fridge, sink, mixer, meeting table, sofa, plants.
+  `python assets/fetch_sketchfab.py` (needs SKETCHFAB_API_TOKEN in .env).
+* Poly Haven (CC0): café table, bench, cash register, cabinets, shelves. `python assets/fetch_cc0.py`.
+Chair styles are mixed on purpose: each kind of table or desk gets its own chair. Without the
+sources, items fall back to Poly Haven only, then to simple box geometry. The ovens, condiment
+station and phone booth stay simple shapes (no realistic free model found).
 """
 
 from __future__ import annotations
@@ -314,6 +318,41 @@ def check(mesh: trimesh.Trimesh, item: dict) -> None:
 # --------------------------------------------------------------------------- #
 
 CC0_DIR = ROOT.parent / "data" / "cc0"
+SKETCHFAB_DIR = ROOT.parent / "data" / "sketchfab"  # see fetch_sketchfab.py
+# Sketchfab models come in their authors' units and orientation. Each is turned (yaw, degrees about
+# +y) so its front faces +z like every other model here; sizes are set where it is used (fit()).
+# "src" reuses another download; "keep"/"drop" pick parts by node name (the desk comes with a chair).
+SKETCHFAB_FIX = {
+    "office_chair_mesh": {"yaw": 90.0},
+    "leather_office_chair": {"yaw": 0.0},
+    "bentwood_chair": {"yaw": 0.0},
+    "bistro_chair": {"yaw": -90.0},
+    "tolix_chair": {"yaw": 0.0},
+    "cafe_table": {"yaw": 0.0},
+    "pastry_case": {"yaw": 0.0},  # curved glass toward the customer
+    "bar_counter": {"yaw": 0.0},  # panelled side toward the customer
+    "espresso_machine": {"yaw": 0.0},  # group heads toward +z (turned to the barista when placed)
+    "commercial_fridge": {"yaw": 0.0},
+    "steel_table": {"yaw": 90.0},  # long side along x
+    "commercial_sink": {"yaw": 0.0},
+    "dough_mixer": {"yaw": 0.0},
+    "wood_desk": {"yaw": 0.0, "drop": ("Office-Chair",)},  # the user sits on the +z side
+    "wood_desk_chair": {"src": "wood_desk", "yaw": 180.0, "keep": ("Office-Chair",)},
+    "dual_monitors": {"yaw": 0.0},
+    "laptop": {"yaw": 0.0},  # keyboard toward +z
+    "glass_meeting_table": {"yaw": 0.0},  # table with six chrome chairs
+    "modern_sofa": {"yaw": 0.0},
+    "table_tennis": {"yaw": 0.0},  # long side along x
+    "foosball": {"yaw": 0.0},  # goal to goal along x, handles toward +z/-z
+    "koi": {"yaw": 0.0},
+    "office_printer": {"yaw": 0.0},  # control panel toward +z
+    "mobile_whiteboard": {"yaw": 0.0},
+    "floor_lamp_classic": {"yaw": 0.0},
+    "persian_rug": {"yaw": 90.0},  # long side along x
+    "old_persian_carpet": {"yaw": 90.0},
+    "monstera": {"yaw": 0.0},
+    "pothos": {"yaw": 0.0},
+}
 TEX_MAX = 512  # texture side in pixels: keeps each GLB small enough for the browser
 
 
@@ -344,10 +383,28 @@ def _shrink(img, side: int):
 @lru_cache(maxsize=None)
 def cc0(mid: str) -> tuple[trimesh.Trimesh, ...] | None:
     """The model's meshes in world units, centered on x/z with the bottom at y = 0, textures shrunk."""
-    path = CC0_DIR / mid / f"{mid}.gltf"
+    fix = SKETCHFAB_FIX.get(mid)
+    path = SKETCHFAB_DIR / fix.get("src", mid) / "model.glb" if fix else CC0_DIR / mid / f"{mid}.gltf"
     if not path.exists():
         return None
-    meshes = [m for m in trimesh.load(path, force="scene").dump() if isinstance(m, trimesh.Trimesh)]
+    if fix:
+        scene = trimesh.load(path, force="scene")
+        keep, drop = fix.get("keep"), fix.get("drop", ())
+        meshes = []
+        for node in scene.graph.nodes_geometry:
+            if (keep and not any(k in node for k in keep)) or any(k in node for k in drop):
+                continue
+            transform, geom = scene.graph[node]
+            m = scene.geometry[geom]
+            if isinstance(m, trimesh.Trimesh):
+                m = m.copy()
+                m.apply_transform(transform)
+                meshes.append(m)
+        t = trimesh.transformations.rotation_matrix(math.radians(fix["yaw"]), (0, 1, 0))
+        for m in meshes:
+            m.apply_transform(t)
+    else:
+        meshes = [m for m in trimesh.load(path, force="scene").dump() if isinstance(m, trimesh.Trimesh)]
     allv = np.vstack([m.vertices for m in meshes])
     lo, hi = allv.min(axis=0), allv.max(axis=0)
     shift = np.array([-(lo[0] + hi[0]) / 2, -lo[1], -(lo[2] + hi[2]) / 2])
@@ -367,6 +424,25 @@ def cc0(mid: str) -> tuple[trimesh.Trimesh, ...] | None:
 
 def have(*mids: str) -> bool:
     return all(cc0(m) is not None for m in mids)
+
+
+def size_of(mid: str) -> np.ndarray:
+    v = np.vstack([m.vertices for m in cc0(mid)])
+    return v.max(axis=0) - v.min(axis=0)
+
+
+def fit(mid: str, w: float | None = None, h: float | None = None, d: float | None = None, stretch: bool = False):
+    """Scale for put(): the model's width/height/depth (its own x/y/z, front = +z) brought to the given
+    meters. Uniform (the smallest ratio, so it fits) unless stretch=True; a missing axis then takes
+    the average of the others."""
+    ex, ey, ez = size_of(mid)
+    r = [w / ex if w else None, h / ey if h else None, d / ez if d else None]
+    given = [v for v in r if v]
+    if not stretch:
+        s = min(given)
+        return (s, s, s)
+    avg = sum(given) / len(given)
+    return tuple(v or avg for v in r)
 
 
 class Instance:
@@ -425,9 +501,147 @@ def water(w, h, d, x=0.0, y=0.0, z=0.0) -> trimesh.Trimesh:
 CAFE_CHAIR, MODERN_CHAIR = "painted_wooden_chair_01", "dining_chair_02"
 
 
+def turned(facing: tuple[float, float], deg: float) -> tuple[float, float]:
+    """`facing` swiveled by a few degrees, so rows of chairs don't look machine-placed."""
+    a = math.radians(deg)
+    return (facing[0] * math.cos(a) + facing[1] * math.sin(a), -facing[0] * math.sin(a) + facing[1] * math.cos(a))
+
+
+SWIVEL = (-9.0, 6.0, -4.0, 11.0, 3.0, -7.0, 8.0, -12.0)  # fixed, so builds are reproducible
+
+
+DESK_TOP = 0.76  # m
+WOOD_DESK_TOP_SHARE = 816 / 1296  # the desk model's top sits at this share of its height (lamp included)
+
+
+def _desk(w: float, d: float, x=0.0, z=0.0, facing=(0.0, 1.0)) -> list:
+    """The wood desk (tablet, frames, lamp and books on it) at DESK_TOP height, user on its `facing` side."""
+    return put("wood_desk", x=x, z=z, facing=facing, scale=fit("wood_desk", w=w, h=DESK_TOP / WOOD_DESK_TOP_SHARE, d=d, stretch=True))
+
+
+def build_sketchfab(item: dict) -> list | None:
+    """The item from Sketchfab models (CC-BY, assets/CREDITS.md), or None when the sources are missing.
+    Chairs are mixed on purpose: each kind of table or desk gets its own chair style."""
+    t, w, d, h = item["item_type"], item["width_m"], item["depth_m"], item["height_m"]
+    if t == "table_2" and have("cafe_table", "bistro_chair"):
+        parts = put("cafe_table", scale=fit("cafe_table", h=0.75))
+        chair = fit("bistro_chair", h=0.86)
+        parts += put("bistro_chair", z=-d / 2 + 0.26, facing=turned((0, 1), SWIVEL[0]), scale=chair)
+        return parts + put("bistro_chair", z=d / 2 - 0.26, facing=turned((0, -1), SWIVEL[3]), scale=chair)
+    if t == "table_4" and have("round_wooden_table_02", "bentwood_chair"):
+        parts = put("round_wooden_table_02")
+        for k, (fx, fz) in enumerate(((0, 1), (0, -1), (1, 0), (-1, 0))):
+            parts += put("bentwood_chair", x=-fx * (w / 2 - 0.28), z=-fz * (d / 2 - 0.28), facing=turned((fx, fz), SWIVEL[k] * 0.6))
+        return parts
+    if t == "bench_table_4" and have("painted_wooden_bench", "wooden_table_02", "tolix_chair"):
+        parts = put("painted_wooden_bench", z=-d / 2 + 0.26, scale=(w / 1.2, 1, 1))
+        parts += put("wooden_table_02", z=-d / 2 + 0.52 + 0.36, scale=(w / 1.2, 1, 1))
+        chair = fit("tolix_chair", h=0.86)
+        return parts + [p for k, sx in enumerate((-w / 4, w / 4)) for p in put("tolix_chair", x=sx, z=d / 2 - 0.27, facing=turned((0, -1), SWIVEL[k + 4]), scale=chair)]
+    if t == "display_case" and have("pastry_case"):
+        return put("pastry_case", scale=fit("pastry_case", w=w, h=h, d=d, stretch=True))
+    if t in ("service_counter", "espresso_bar") and have("bar_counter"):
+        parts = put("bar_counter", scale=fit("bar_counter", w=w, h=1.0, d=d, stretch=True))
+        if t == "service_counter" and have("CashRegister_01"):
+            parts += put("CashRegister_01", x=w * 0.25, z=-0.05, y=1.0, scale=(0.6, 0.6, 0.6), facing=(0, -1))
+        if t == "espresso_bar" and have("espresso_machine"):
+            parts += put("espresso_machine", x=-w * 0.15, z=-0.05, y=1.0, facing=(0, -1), scale=fit("espresso_machine", h=0.5))
+        return parts
+    if t in ("reach_in_fridge", "proofing_cabinet") and have("commercial_fridge"):
+        return put("commercial_fridge", scale=fit("commercial_fridge", w=w, h=h, d=d, stretch=True))
+    if t == "prep_table" and have("steel_table"):
+        return put("steel_table", scale=fit("steel_table", w=w, h=h, d=d, stretch=True))
+    if t == "three_comp_sink" and have("commercial_sink"):
+        return put("commercial_sink", scale=fit("commercial_sink", w=w, h=h, d=d, stretch=True))
+    if t == "spiral_mixer" and have("steel_table", "dough_mixer"):
+        top = 0.8
+        parts = put("steel_table", scale=fit("steel_table", w=w, h=top, d=d, stretch=True))
+        return parts + put("dough_mixer", y=top, scale=fit("dough_mixer", w=w * 0.95, d=d * 0.95))
+    if t == "desk_pod" and have("wood_desk", "office_chair_mesh", "laptop"):
+        parts = [box(w * 0.98, 0.35, 0.03, y=DESK_TOP, color=FABRIC)]  # low screen between the facing desks
+        k = 0
+        for side in (-1, 1):
+            for dx in (-w / 4, w / 4):
+                parts += _desk(w / 2 - 0.04, 0.7, x=dx, z=side * 0.36, facing=(0, side))
+                parts += put("laptop", x=dx + 0.1, z=side * 0.45, y=DESK_TOP, facing=(0, side), scale=fit("laptop", w=0.34))
+                parts += put("office_chair_mesh", x=dx, z=side * (d / 2 - 0.34), facing=turned((0, -side), SWIVEL[k]),
+                             scale=fit("office_chair_mesh", h=0.98))
+                k += 1
+        return parts
+    if t == "single_desk" and have("wood_desk", "wood_desk_chair"):
+        parts = _desk(w - 0.04, 0.7, z=-d / 2 + 0.36)
+        return parts + put("wood_desk_chair", z=-d / 2 + 0.7 + 0.32, facing=turned((0, -1), SWIVEL[2]), scale=fit("wood_desk_chair", h=0.95))
+    if t == "meeting_table" and have("glass_meeting_table"):
+        return put("glass_meeting_table", facing=(1, 0), scale=fit("glass_meeting_table", w=w - 0.1, h=h, d=d - 0.1))
+    if t == "reception_desk" and have("bar_counter", "leather_office_chair", "dual_monitors", "pothos"):
+        front_z = d / 2 - 0.3
+        parts = put("bar_counter", z=front_z, scale=fit("bar_counter", w=w, h=1.05, d=0.6, stretch=True))
+        parts += put("dual_monitors", z=front_z - 0.12, y=1.05, facing=(0, -1), scale=fit("dual_monitors", w=0.9))
+        parts += put("pothos", x=w / 2 - 0.25, z=front_z, y=1.05, scale=fit("pothos", h=0.35))
+        return parts + put("leather_office_chair", z=-d / 2 + 0.36, facing=(0, 1), scale=fit("leather_office_chair", h=1.0))
+    if t == "sofa" and have("modern_sofa", "monstera"):
+        parts = put("modern_sofa", x=-0.22, scale=fit("modern_sofa", w=w - 0.46, h=0.72, d=d - 0.04, stretch=True))
+        return parts + put("monstera", x=w / 2 - 0.22, z=-0.1, scale=fit("monstera", w=0.44))
+    if t == "kitchenette_counter" and have("modern_wooden_cabinet", "espresso_machine"):
+        parts = put("modern_wooden_cabinet", scale=fit("modern_wooden_cabinet", w=w, h=0.88, d=d - 0.05, stretch=True))
+        parts += [box(w + 0.02, 0.04, d, y=0.88, color=PLASTIC_WHITE)]  # worktop
+        parts += put("modern_wooden_cabinet", y=1.45, z=-d / 2 + 0.18, scale=fit("modern_wooden_cabinet", w=w, h=0.7, d=0.35, stretch=True))
+        return parts + put("espresso_machine", x=-w / 4, y=0.92, scale=fit("espresso_machine", h=0.38))
+    if t == "huddle_table" and have("round_wooden_table_02", "tolix_chair"):
+        parts = put("round_wooden_table_02", scale=(1.25, 1.1, 1.25))
+        chair = fit("tolix_chair", h=0.86)
+        for k, (fx, fz) in enumerate(((0, 1), (0, -1), (1, 0), (-1, 0))):
+            parts += put("tolix_chair", x=-fx * (w / 2 - 0.3), z=-fz * (d / 2 - 0.3), facing=turned((fx, fz), SWIVEL[k + 2] * 0.6), scale=chair)
+        return parts
+    if t == "table_tennis" and have("table_tennis"):
+        return put("table_tennis", scale=fit("table_tennis", w=w, h=0.8, d=d, stretch=True))
+    if t == "foosball_table" and have("foosball"):
+        return put("foosball", scale=fit("foosball", w=w, h=h, d=d, stretch=True))
+    if t == "printer_station" and have("office_printer"):
+        return put("office_printer", scale=fit("office_printer", w=w, h=h, d=d))
+    if t == "whiteboard" and have("mobile_whiteboard"):
+        return put("mobile_whiteboard", scale=fit("mobile_whiteboard", w=w, h=h, d=d, stretch=True))
+    if t == "floor_lamp" and have("floor_lamp_classic"):
+        return put("floor_lamp_classic", scale=fit("floor_lamp_classic", w=w, h=h, d=d))
+    if t.startswith("rug_") and have("persian_rug", "old_persian_carpet"):
+        mid = "old_persian_carpet" if t == "rug_huddle" else "persian_rug"  # two patterns, so rooms differ
+        return put(mid, scale=fit(mid, w=w, h=0.02, d=d, stretch=True))
+    if t == "coffee_bar" and have("bar_counter", "espresso_machine", "pothos"):
+        parts = put("bar_counter", scale=fit("bar_counter", w=w, h=1.0, d=d, stretch=True))
+        parts += put("espresso_machine", x=-w * 0.2, y=1.0, scale=fit("espresso_machine", h=0.45))  # faces the people using it
+        return parts + put("pothos", x=w / 2 - 0.25, y=1.0, scale=fit("pothos", h=0.35))
+    if t == "fish_pond" and have("koi"):  # Biniyam's stone pond with real koi under the water
+        stone, rim = (150, 150, 142, 255), 0.22
+        parts = [box(w, h, rim, z=-d / 2 + rim / 2, color=stone), box(w, h, rim, z=d / 2 - rim / 2, color=stone),
+                 box(rim, h, d - 2 * rim, x=-w / 2 + rim / 2, color=stone), box(rim, h, d - 2 * rim, x=w / 2 - rim / 2, color=stone),
+                 box(w - 2 * rim, 0.28, d - 2 * rim, color=(34, 70, 84, 255))]
+        koi = fit("koi", w=0.46)
+        for x, z, f in ((-0.7, 0.1, (1, 0.3)), (0.2, -0.3, (-1, 0.2)), (0.8, 0.25, (0.4, -1)), (-0.1, 0.35, (1, -0.5)), (0.5, -0.1, (-0.6, 1))):
+            parts += put("koi", x=x, z=z, y=0.32, facing=f, scale=koi)
+        parts += [cylinder(0.17, 0.012, -0.35, 0.42, -0.2, color=(70, 130, 70, 255)), cylinder(0.14, 0.012, 0.9, 0.42, 0.1, color=(70, 130, 70, 255))]
+        parts += [sphere(0.12, -w / 2 + rim + 0.18, 0.5, -d / 2 + rim + 0.15, (120, 120, 118, 255)), sphere(0.09, -w / 2 + rim + 0.34, 0.5, -d / 2 + rim + 0.12, (135, 135, 130, 255))]
+        if have("pothos"):
+            parts += put("pothos", x=w / 2 - 0.25, y=h, z=d / 2 - 0.2, scale=fit("pothos", w=0.3, d=0.36))
+        parts.append(water(w - 2 * rim, 0.01, d - 2 * rim, y=0.42))
+        return parts
+    if t == "plant_large" and have("monstera"):
+        return [box(0.36, 0.4, 0.36, color=WHITE)] + put("monstera", y=0.4, scale=fit("monstera", w=w, h=h - 0.4, d=d))
+    if t == "planter_divider" and have("pothos"):
+        parts = [box(w, 0.45, d, color=CHARCOAL)]
+        for x in np.linspace(-w / 2 + 0.3, w / 2 - 0.3, 3):
+            parts += put("pothos", x=float(x), y=0.45, scale=fit("pothos", w=0.56, h=h - 0.45, d=d))
+        return parts
+    return None
+
+
 def build_real(item: dict) -> list[trimesh.Trimesh] | None:
     """Realistic version of an item, or None to use the simple one."""
+    parts = build_sketchfab(item)
+    if parts is not None:
+        return parts
     t, w, d, h = item["item_type"], item["width_m"], item["depth_m"], item["height_m"]
+    # Fallback when the Sketchfab sources are missing: Poly Haven chairs only.
+    CAFE_CHAIR, DESK_CHAIR, MEETING_CHAIR = "painted_wooden_chair_01", "dining_chair_02", "dining_chair_02"
     if t == "table_tennis":  # long side along x; net across the middle
         parts = [box(w, 0.03, d, y=0.73, color=(28, 78, 140, 255)), box(w - 0.04, 0.004, 0.02, y=0.76, color=WHITE), box(0.02, 0.004, d - 0.04, x=0.0, y=0.76, color=WHITE),
                  box(0.02, 0.15, d, y=0.76, color=WHITE), box(w - 0.04, 0.004, 0.02, y=0.76, z=d / 2 - 0.02, color=WHITE)]
@@ -489,26 +703,31 @@ def build_real(item: dict) -> list[trimesh.Trimesh] | None:
         return parts + put("CashRegister_01", x=w * 0.25, z=-0.05, y=h, scale=(0.6, 0.6, 0.6), facing=(0, -1))
     if t == "retail_shelf" and have("wooden_display_shelves_01"):
         return put("wooden_display_shelves_01", z=0.0, facing=(1, 0), scale=(d / 0.4, h / 1.56, w / 1.1))
-    if t == "desk_pod" and have(MODERN_CHAIR):
+    if t == "desk_pod" and have(DESK_CHAIR):
         parts = [box(w * 0.98, 0.35, 0.03, y=0.75, color=TEAL)]
+        k = 0
         for side in (-1, 1):
             for dx in (-w / 4, w / 4):
                 parts += office_desk(w / 2 - 0.04, 0.7, dx, side * 0.36, monitor_side=-side)
-                parts += put(MODERN_CHAIR, x=dx, z=side * (d / 2 - 0.3), facing=(0, -side))
+                parts += put(DESK_CHAIR, x=dx, z=side * (d / 2 - 0.34), facing=turned((0, -side), SWIVEL[k]))
+                k += 1
         return parts
-    if t == "single_desk" and have(MODERN_CHAIR):
-        return office_desk(w - 0.04, 0.7, 0, -d / 2 + 0.36, monitor_side=-1) + put(MODERN_CHAIR, z=d / 2 - 0.3, facing=(0, -1))
-    if t == "meeting_table" and have(MODERN_CHAIR):
+    if t == "single_desk" and have(DESK_CHAIR):
+        return office_desk(w - 0.04, 0.7, 0, -d / 2 + 0.36, monitor_side=-1) + put(DESK_CHAIR, z=d / 2 - 0.34, facing=turned((0, -1), SWIVEL[1]))
+    if t == "meeting_table" and have(MEETING_CHAIR):
         parts = [box(2.0, 0.04, 1.1, y=0.72, color=WALNUT)]
         parts += [box(0.08, 0.72, 0.8, x=sx, color=DARK_STEEL) for sx in (-0.75, 0.75)]
+        k = 0
         for dx in (-0.65, 0.0, 0.65):
-            parts += put(MODERN_CHAIR, x=dx, z=-(d / 2 - 0.3), facing=(0, 1)) + put(MODERN_CHAIR, x=dx, z=d / 2 - 0.3, facing=(0, -1))
-        parts += put(MODERN_CHAIR, x=-(w / 2 - 0.3), facing=(1, 0)) + put(MODERN_CHAIR, x=w / 2 - 0.3, facing=(-1, 0))
+            parts += put(MEETING_CHAIR, x=dx, z=-(d / 2 - 0.32), facing=turned((0, 1), SWIVEL[k] * 0.5))
+            parts += put(MEETING_CHAIR, x=dx, z=d / 2 - 0.32, facing=turned((0, -1), SWIVEL[k + 3] * 0.5))
+            k += 1
+        parts += put(MEETING_CHAIR, x=-(w / 2 - 0.32), facing=(1, 0)) + put(MEETING_CHAIR, x=w / 2 - 0.32, facing=(-1, 0))
         return parts
-    if t == "reception_desk" and have(MODERN_CHAIR):
+    if t == "reception_desk" and have(DESK_CHAIR):
         parts = [box(w, 1.05, 0.6, z=d / 2 - 0.3, color=CORAL), box(w, 0.04, 0.35, y=1.05, z=d / 2 - 0.18, color=PLASTIC_WHITE),
                  box(w * 0.9, 0.03, 0.6, y=0.72, z=d / 2 - 0.85, color=PLASTIC_WHITE), box(0.6, 0.36, 0.03, y=0.9, z=d / 2 - 0.68, color=SCREEN)]
-        return parts + put(MODERN_CHAIR, z=-d / 2 + 0.3, facing=(0, 1))
+        return parts + put(DESK_CHAIR, z=-d / 2 + 0.34, facing=(0, 1))
     if t == "lounge_set" and have("sofa_02", "modern_arm_chair_01", "modern_coffee_table_01"):
         parts = put("sofa_02", z=-d / 2 + 0.41, facing=(0, -1), scale=(2.0 / 1.81, 1, 1))
         parts += put("modern_coffee_table_01", z=0.2, facing=(1, 0), scale=(0.83, 0.83, 0.83))

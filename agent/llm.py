@@ -44,10 +44,14 @@ def get_chat_model(fast: bool = False, max_tokens: int = 4096):
         return ChatGoogleGenerativeAI(model=model, google_api_key=key, max_output_tokens=max_tokens,
                                       timeout=120, max_retries=6, rate_limiter=_gemini_limiter(), **extra)
 
+    from botocore.config import Config
     from langchain_aws import ChatBedrockConverse
 
     model = (fast and config.FAST_MODEL_ID) or config.BEDROCK_MODEL_ID
-    return ChatBedrockConverse(model=model, region_name=config.AWS_REGION, max_tokens=max_tokens)
+    # The account's per-minute quota is low and the agent inspects many spaces at once: back off
+    # and retry on throttling (adaptive mode also slows the request rate) instead of failing a tool.
+    retry = Config(retries={"max_attempts": 10, "mode": "adaptive"}, read_timeout=300)
+    return ChatBedrockConverse(model=model, region_name=config.AWS_REGION, max_tokens=max_tokens, config=retry)
 
 
 @lru_cache(maxsize=1)

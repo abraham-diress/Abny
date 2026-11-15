@@ -36,5 +36,5 @@
   {"item_type": "rug_meeting", "label": "Meeting rug", "glb_asset": "assets/glb/rug_meeting.glb", "width_m": 3.8, "depth_m": 3.8, "height_m": 0.03, "clearance_front_m": 0.0, "seats": 0, "zone": "front_of_house", "business_types": ["office"]},
   {"item_type": "table_tennis", "label": "Table tennis table", "glb_asset": "assets/glb/table_tennis.glb", "width_m": 2.74, "depth_m": 1.53, "height_m": 0.9, "clearance_front_m": 1.4, "seats": 0, "zone": "front_of_house", "business_types": ["office"]},
   {"item_type": "fish_pond", "label": "Indoor koi pond", "glb_asset": "assets/glb/fish_pond.glb", "width_m": 3.0, "depth_m": 1.6, "height_m": 0.8, "clearance_front_m": 0.9, "seats": 0, "zone": "front_of_house", "business_types": ["office"]},
-  {"item_type": "foosball_table", "label": "Foosball table", "glb_asset": "assets/glb/foosball_table.glb", "width_m": 1.4, "depth_m": 0.75, "height_m": 0.95, "clearance_front_m": 1.0, "seats": 0, "zone": "front_of_house", "business_types": ["office"]}
+  {"item_type": "foosball_table", "label": "Foosball table", "glb_asset": "assets/glb/foosball_table.glb", "width_m": 1.4, "depth_m": 1.3, "height_m": 0.95, "clearance_front_m": 1.0, "seats": 0, "zone": "front_of_house", "business_types": ["office"]}
 ]

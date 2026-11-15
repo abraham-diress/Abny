@@ -1,9 +1,9 @@
 """Vision-model image judge: realism and "does it follow the plan".
 
-Off by default; set SCORER_LLM=1 to enable. Uses LLM_PROVIDER (gemini | anthropic | bedrock):
-  gemini:    model JUDGE_MODEL (default gemini-3.5-flash; flash-lite scores too generously), key GOOGLE_API_KEY
-  anthropic: Anthropic, model ANTHROPIC_MODEL (default claude-opus-5-5)
-  bedrock:   Bedrock Converse (works with a Bedrock API key), model BEDROCK_MODEL_ID (default anthropic.claude-opus-5-5)
+Off by default; set SCORER_LLM=1 to enable. Uses LLM_PROVIDER (bedrock, the default | anthropic):
+  anthropic: Anthropic API, model ANTHROPIC_MODEL (default claude-opus-5-5)
+  bedrock:   Bedrock Converse API (boto3), model JUDGE_BEDROCK_MODEL or BEDROCK_MODEL_ID; works with a
+             Bedrock API key (AWS_BEARER_TOKEN_BEDROCK) and with any Claude model the account can use
 Returns None if disabled, unavailable, or the model declines; callers fall back to heuristics.
 """
 
@@ -12,7 +12,6 @@ from __future__ import annotations
 import base64
 import logging
 import os
-import time
 from functools import lru_cache
 
 import cv2
@@ -46,17 +45,38 @@ def enabled() -> bool:
 
 @lru_cache(maxsize=1)
 def _client_and_model():
-    provider = os.environ.get("LLM_PROVIDER", "gemini").lower()
-    if provider == "anthropic":
-        from anthropic import Anthropic
+    from anthropic import Anthropic
 
-        return Anthropic(), os.environ.get("ANTHROPIC_MODEL", "claude-opus-5-5")
-    from anthropic import AnthropicBedrockMantle
+    return Anthropic(), os.environ.get("ANTHROPIC_MODEL", "claude-opus-5-5")
 
-    return (
-        AnthropicBedrockMantle(aws_region=os.environ.get("AWS_REGION", "us-east-1")),
-        os.environ.get("BEDROCK_MODEL_ID", "anthropic.claude-opus-5-5"),
-    )
+
+def _jpeg(img: np.ndarray) -> bytes:
+    ok, buf = cv2.imencode(".jpg", _small(img), [cv2.IMWRITE_JPEG_QUALITY, 88])
+    return buf.tobytes()
+
+
+def _judge_bedrock(images: list[np.ndarray]) -> JudgeResult | None:
+    """Claude on Bedrock through the Converse API: one call shape for every Claude model there."""
+    import json
+    import re
+
+    import boto3
+
+    from botocore.config import Config
+
+    client = boto3.client("bedrock-runtime", region_name=os.environ.get("AWS_REGION", "us-east-1"),
+                          config=Config(retries={"max_attempts": 8, "mode": "adaptive"}))
+    model = os.environ.get("JUDGE_BEDROCK_MODEL") or os.environ.get("BEDROCK_MODEL_ID", "us.anthropic.claude-opus-4-6-v1")
+    content = [{"image": {"format": "jpeg", "source": {"bytes": _jpeg(img)}}} for img in images]
+    content.append({"text": RUBRIC + "\n\nReply with only a JSON object with the keys realism_1to5, "
+                    "plan_adherence, structure_preserved and notes."})
+    resp = client.converse(modelId=model, messages=[{"role": "user", "content": content}],
+                           inferenceConfig={"maxTokens": 1000})
+    if resp.get("stopReason") == "guardrail_intervened":
+        return None
+    text = "".join(b.get("text", "") for b in resp["output"]["message"]["content"])
+    found = re.search(r"\{.*\}", text, re.S)
+    return JudgeResult.model_validate(json.loads(found.group(0))) if found else None
 
 
 def _small(img: np.ndarray) -> np.ndarray:
@@ -71,72 +91,15 @@ def _image_block(img: np.ndarray) -> dict:
     return {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": data}}
 
 
-def _judge_gemini(images: list[np.ndarray]) -> JudgeResult | None:
-    from google import genai
-    from google.genai import types
-
-    client = genai.Client(api_key=os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY"))
-    parts = []
-    for img in images:
-        ok, buf = cv2.imencode(".jpg", _small(img), [cv2.IMWRITE_JPEG_QUALITY, 88])
-        parts.append(types.Part.from_bytes(data=buf.tobytes(), mime_type="image/jpeg"))
-    resp = client.models.generate_content(
-        model=os.environ.get("JUDGE_MODEL", "gemini-3.5-flash"),
-        contents=[*parts, RUBRIC],
-        config=types.GenerateContentConfig(response_mime_type="application/json", response_schema=JudgeResult),
-    )
-    return resp.parsed if isinstance(resp.parsed, JudgeResult) else JudgeResult.model_validate_json(resp.text)
-
-
-def _judge_bedrock(images: list[np.ndarray]) -> JudgeResult | None:
-    """Score with a Bedrock Claude model through the Converse API (a Bedrock API key in AWS_BEARER_TOKEN_BEDROCK
-    or normal AWS credentials both work). Converse has no structured output, so the model is asked for JSON."""
-    import json
-    import re
-
-    import boto3
-
-    client = boto3.client("bedrock-runtime", region_name=os.environ.get("AWS_REGION", "us-east-1"))
-    content = []
-    for img in images:
-        ok, buf = cv2.imencode(".jpg", _small(img), [cv2.IMWRITE_JPEG_QUALITY, 88])
-        content.append({"image": {"format": "jpeg", "source": {"bytes": buf.tobytes()}}})
-    reply_format = ('Answer with only a JSON object: {"realism_1to5": number, "plan_adherence": number, '
-                    '"structure_preserved": true or false, "notes": "short sentence"}')
-    content.append({"text": f"{RUBRIC}\n\n{reply_format}"})
-    resp = client.converse(
-        modelId=os.environ.get("BEDROCK_MODEL_ID", "anthropic.claude-opus-5-5"),
-        messages=[{"role": "user", "content": content}],
-        inferenceConfig={"maxTokens": 600, "temperature": 0.0},
-    )
-    text = "".join(b.get("text", "") for b in resp["output"]["message"]["content"])
-    match = re.search(r"\{.*\}", text, re.S)
-    if not match:
-        log.warning("Judge answered without JSON: %.120s", text)
-        return None
-    return JudgeResult.model_validate(json.loads(match.group(0)))
-
-
 def judge(original: np.ndarray, guide: np.ndarray | None, generated: np.ndarray) -> JudgeResult | None:
     if not enabled():
         return None
-    if os.environ.get("LLM_PROVIDER", "gemini").lower() == "bedrock":
+    if os.environ.get("LLM_PROVIDER", "bedrock").lower() != "anthropic":
         try:
             return _judge_bedrock([original, guide if guide is not None else original, generated])
         except Exception as exc:  # noqa: BLE001 - judging is best-effort
             log.warning("Judge unavailable: %s", exc)
             return None
-    if os.environ.get("LLM_PROVIDER", "gemini").lower() == "gemini":
-        for attempt in range(2):  # one retry: Gemini returns 503/429 under load
-            try:
-                return _judge_gemini([original, guide if guide is not None else original, generated])
-            except Exception as exc:  # noqa: BLE001 - judging is best-effort
-                busy = any(code in str(exc) for code in ("503", "429", "UNAVAILABLE", "RESOURCE_EXHAUSTED"))
-                if attempt == 0 and busy:
-                    time.sleep(5)
-                    continue
-                log.warning("Judge unavailable: %s", exc)
-                return None
     try:
         client, model = _client_and_model()
         content = [_image_block(original), _image_block(guide if guide is not None else original), _image_block(generated)]

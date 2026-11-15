@@ -1,8 +1,6 @@
-"""Gate G3: is AI-generated furniture good enough to show judges? (~5 minutes, uses GOOGLE_API_KEY)
+"""Gate G3: is AI-generated furniture good enough to show judges? (~5 minutes, Stability AI on Bedrock)
 
     python eval/g3_image_test.py --images room1.jpg room2.jpg room3.jpg room4.jpg room5.jpg
-    GEMINI_IMAGE_MODEL=gemini-3-pro-image python eval/g3_image_test.py --images ...   # slower, better rooms
-    IMAGE_PROVIDER=bedrock_nova python eval/g3_image_test.py --images ... [--flip-mask]  # Nova (needs AWS)
 
 For each photo of an empty room (a panorama face from Matterport, or any interior photo):
 * mark the lower-middle of the room (where a counter and tables would go),
@@ -17,7 +15,6 @@ from __future__ import annotations
 
 import argparse
 import html
-import os
 import sys
 from pathlib import Path
 
@@ -31,8 +28,8 @@ from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv(ROOT / ".env")
 
-from agent.staging import gemini_image, nova  # noqa: E402
-from agent.staging.generate import generate_images, provider  # noqa: E402
+from agent.staging import stability  # noqa: E402
+from agent.staging.generate import generate_images  # noqa: E402
 from agent.staging.score import score_arrays  # noqa: E402
 from shared.conventions import MEDIA_DIR  # noqa: E402
 
@@ -62,10 +59,7 @@ def sketch_and_mask(img: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--images", nargs="+", required=True, type=Path)
-    ap.add_argument("--flip-mask", action="store_true", help="Nova only: invert mask polarity")
     args = ap.parse_args()
-    if args.flip_mask:
-        os.environ["NOVA_MASK_BLACK_IS_EDIT"] = "0"
 
     out_dir = MEDIA_DIR / "g3"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -75,7 +69,7 @@ def main() -> int:
         if img is None:
             print(f"skip {path}: not an image")
             continue
-        img = nova.fit_size(img)
+        img = stability._fit(img)
         sketch, mask = sketch_and_mask(img)
         cv2.imwrite(str(out_dir / f"{i}_room.png"), img)
         cv2.imwrite(str(out_dir / f"{i}_sketch.png"), sketch)
@@ -88,7 +82,7 @@ def main() -> int:
                 s = score_arrays(img, gen, mask, sketch)
                 cells.append((mode, f"{i}_{mode}.png", f"structure {s.structure_preserved} · plan {s.plan_adherence} · realism {s.realism_1to5}"))
                 print(f"{path.name} {mode}: {s}")
-            except (nova.NovaError, gemini_image.GeminiImageError) as exc:
+            except stability.StabilityError as exc:
                 cells.append((mode, None, html.escape(str(exc))[:300]))
                 print(f"{path.name} {mode}: FAILED {exc}")
         rows.append((i, path.name, cells))
@@ -103,7 +97,7 @@ def main() -> int:
             parts.append(f"<div>{f'<img src={chr(39)}{file}{chr(39)}>' if file else ''}<small><b>{mode}</b> {note}</small></div>")
         parts.append("</div>")
     (out_dir / "index.html").write_text("".join(parts))
-    print(f"\nContact sheet ({provider()}): {out_dir / 'index.html'}")
+    print(f"\nContact sheet (Stability on Bedrock): {out_dir / 'index.html'}")
     return 0
 
 

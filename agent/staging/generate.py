@@ -4,8 +4,9 @@ Steps: pick the panorama face that shows the most of the layout (furniture-free 
 render_guide (boxes + mask) -> generate N images -> score each -> keep the best -> one retry
 with new seeds if none pass.
 
-IMAGE_PROVIDER (env): gemini (default; GOOGLE_API_KEY) | bedrock_stability (Bedrock; inpaint only) | bedrock_nova (AWS;
-  Nova Canvas has reached end of life on Bedrock).
+Images come from Stability AI on Amazon Bedrock (stability.py; AWS_BEARER_TOKEN_BEDROCK or AWS
+credentials). The prompt names the furniture this photo actually shows, so a box marked "café
+table" gets a table and not whatever the business is best known for.
 HERO_MODE (env):
   inpaint   (default) furniture painted into the real photo; the room outside the boxes is kept
   condition the whole scene is generated from the guide image
@@ -24,9 +25,9 @@ from datetime import datetime, timezone
 import cv2
 
 from agent.layout.templates import TEMPLATES
-from agent.staging import gemini_image, nova, stability
+from agent.staging import stability
 from agent.staging.files import ensure_dirs, mask_url_for, to_path, to_url
-from agent.staging.guide import render_guide, view_score
+from agent.staging.guide import render_guide, view_score, visible_items
 from agent.staging.score import score_image
 from shared.conventions import HEROES_DIR, RUNS_DIR
 from shared.schemas import HeroImage, ImageScore, Layout, PanoRef
@@ -43,7 +44,7 @@ def render_hero(space_id: str, layout: Layout, style: str | None = None) -> Hero
         return _floorplan_hero(space_id, layout, build_prompt(layout, style))
     pano = pick_panorama(panos, layout)
     guide_url = render_guide(layout, pano)
-    prompt = build_prompt(layout, style)
+    prompt = build_prompt(layout, style, visible_items(layout, pano))
     mode = os.environ.get("HERO_MODE", "inpaint").lower()
 
     if mode == "preview":
@@ -58,7 +59,7 @@ def render_hero(space_id: str, layout: Layout, style: str | None = None) -> Hero
         seed = 7 + round_ * 101
         try:
             images = generate_images(mode, original, guide, mask, prompt, n=VARIANTS, seed=seed)
-        except (nova.NovaError, gemini_image.GeminiImageError, stability.StabilityError) as exc:
+        except stability.StabilityError as exc:
             log.warning("hero %s: image generation failed: %s", layout.layout_id, exc)
             if best is None:
                 return _preview(space_id, layout, pano, guide_url, prompt, why=str(exc))
@@ -94,27 +95,17 @@ def render_hero(space_id: str, layout: Layout, style: str | None = None) -> Hero
 
 
 def provider() -> str:
-    return os.environ.get("IMAGE_PROVIDER", "gemini").lower()
+    return "bedrock_stability"
 
 
 def _model_name() -> str:
-    if provider() == "bedrock_nova":
-        return nova._model_id()
-    return stability.model_id() if provider() == "bedrock_stability" else gemini_image.model_id()
+    return stability.model_id()
 
 
 def generate_images(mode: str, original, guide, mask, prompt: str, n: int = 2, seed: int = 7) -> list:
-    """n images from the configured provider. inpaint keeps the real room; condition redraws it."""
-    if provider() == "bedrock_stability":
-        # Inpaint only: the model repaints the masked area of the real photo and sees no guide image.
-        return stability.inpaint(original, mask, prompt, n=n, seed=seed)
-    if provider() == "bedrock_nova":
-        if mode == "condition":
-            return nova.conditioned(guide, prompt, n=n, seed=seed)
-        return nova.inpaint(original, mask, prompt, n=n, seed=seed)
-    if mode == "condition":
-        return gemini_image.condition(guide, prompt, n=n, seed=seed)
-    return gemini_image.edit(original, guide, mask, prompt, n=n, seed=seed)
+    """n images. Stability inpaints: it repaints only the masked furniture areas of the real photo
+    (it sees no guide image), so walls and windows stay. HERO_MODE=condition also inpaints."""
+    return stability.inpaint(original, mask, prompt, n=n, seed=seed)
 
 
 def _preview(space_id: str, layout: Layout, pano: PanoRef, guide_url: str, prompt: str, why: str | None = None) -> HeroImage:
@@ -161,9 +152,41 @@ def pick_panorama(panos: list[PanoRef], layout: Layout) -> PanoRef:
     return max(usable, key=lambda p: (round(view_score(layout, p), 2), p.defurnished))
 
 
-def build_prompt(layout: Layout, style: str | None) -> str:
+# How each item should look in the photo (Stability paints what the prompt names).
+LOOKS = {
+    "table_2": "small round wooden café tables with dark bentwood chairs",
+    "table_4": "small round wooden café tables with dark bentwood chairs",
+    "bench_table_4": "a wooden bench table with bentwood chairs",
+    "display_case": "a glass pastry display case full of bread and pastries",
+    "service_counter": "a wooden service counter with a cash register",
+    "espresso_bar": "an espresso bar with a coffee machine",
+    "condiment_station": "a small condiment station",
+    "retail_shelf": "wooden shelves with neatly arranged products",
+    "deck_oven": "stainless steel bakery ovens",
+    "convection_oven": "stainless steel bakery ovens",
+    "proofing_cabinet": "stainless steel kitchen equipment",
+    "reach_in_fridge": "a stainless steel fridge",
+    "prep_table": "a stainless steel prep table",
+    "three_comp_sink": "a stainless steel sink",
+    "spiral_mixer": "a stainless steel dough mixer",
+    "desk_pod": "white office desks with monitors and black mesh office chairs",
+    "single_desk": "a white office desk with a monitor and a black mesh office chair",
+    "meeting_table": "a wooden meeting table with black high-back office chairs",
+    "reception_desk": "a wooden reception desk",
+    "sofa": "a dark leather sofa",
+    "phone_booth": "an acoustic phone booth",
+    "storage_cabinet": "a storage cabinet with drawers",
+    "kitchenette_counter": "a kitchenette counter",
+}
+
+
+def build_prompt(layout: Layout, style: str | None, shown: list | None = None) -> str:
+    """Photo prompt. `shown` = the items visible in the chosen photo: the prompt names exactly those."""
     tpl = TEMPLATES.get(layout.business_type)
     what = tpl.prompt_hint if tpl else f"{layout.business_type} interior"
+    if shown:
+        looks = list(dict.fromkeys(LOOKS.get(i.item_type, i.item_type.replace("_", " ")) for i in shown))
+        what = f"{layout.business_type} with " + ", ".join(looks)
     parts = [
         f"Photorealistic interior photograph of a {what}",
         f"styled as {style}" if style else "warm, inviting and modern",

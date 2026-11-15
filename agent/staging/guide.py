@@ -114,6 +114,19 @@ def view_score(layout: Layout, pano: PanoRef, floor_y: float | None = None) -> f
     return score
 
 
+def visible_items(layout: Layout, pano: PanoRef, floor_y: float | None = None) -> list:
+    """The layout items this panorama face shows at least partly (camera's room only)."""
+    cam = PanoCamera(pano)
+    fy = _floor_y(layout, pano) if floor_y is None else floor_y
+    out = []
+    for item in _in_camera_room(layout, pano):
+        corners = box_corners(item.x_m, item.z_m, item.width_m, item.depth_m, item.height_m, item.rotation_deg, fy)
+        px, ok = cam.project(corners)
+        if ok.all() and ((px[:, 0] >= 0) & (px[:, 0] < pano.width_px) & (px[:, 1] >= 0) & (px[:, 1] < pano.height_px)).any():
+            out.append(item)
+    return out
+
+
 def count_visible(layout: Layout, pano: PanoRef, floor_y: float | None = None) -> int:
     """How many of the layout's items this panorama face shows (center in frame, camera's room only)."""
     cam = PanoCamera(pano)

@@ -10,7 +10,7 @@ import trimesh
 
 from agent.layout.catalog import load_catalog
 from agent.layout.planner import plan_layout
-from agent.staging import gemini_image, generate, nova
+from agent.staging import generate, stability
 from agent.staging.camera import PanoCamera
 from agent.staging.files import mask_url_for, to_path, to_url
 from agent.staging.guide import count_visible, render_floorplan, render_guide
@@ -102,20 +102,17 @@ def _fake_paint(image, mask, n):
     return out
 
 
-@pytest.mark.parametrize("provider", ["gemini", "bedrock_nova"])
-def test_hero_flow_with_fake_provider(provider, single_room, bakery_brief, pano_file, monkeypatch, tmp_path):
+def test_hero_flow_with_fake_provider(single_room, bakery_brief, pano_file, monkeypatch, tmp_path):
     layout = plan_layout("S1", single_room, None, bakery_brief)
     monkeypatch.setattr(generate, "_panoramas", lambda space_id: [_pano(pano_file)])
-    monkeypatch.setattr(gemini_image, "edit", lambda original, guide, mask, prompt, n=2, seed=7: _fake_paint(original, mask, n))
-    monkeypatch.setattr(nova, "inpaint", lambda image, mask, prompt, n=2, seed=7, **kw: _fake_paint(image, mask, n))
+    monkeypatch.setattr(stability, "inpaint", lambda image, mask, prompt, n=2, seed=7, **kw: _fake_paint(image, mask, n))
     monkeypatch.setattr(generate, "RUNS_DIR", tmp_path)  # keep the real hero log clean
-    monkeypatch.setenv("IMAGE_PROVIDER", provider)
     monkeypatch.setenv("HERO_MODE", "inpaint")
     hero = generate.render_hero("S1", layout, style="light wood and white tile")
     assert hero.score is not None and hero.score.passed
     assert to_path(hero.path).exists() and hero.guide_path
     assert "light wood" in hero.prompt
-    assert ("gemini" in hero.model) == (provider == "gemini")
+    assert "stability" in hero.model
 
     monkeypatch.setenv("HERO_MODE", "preview")
     preview = generate.render_hero("S1", layout)
@@ -128,28 +125,22 @@ def test_hero_falls_back_to_preview_when_generation_fails(single_room, bakery_br
     monkeypatch.setattr(generate, "RUNS_DIR", tmp_path)
 
     def broken(*a, **kw):
-        raise gemini_image.GeminiImageError("quota exceeded")
+        raise stability.StabilityError("quota exceeded")
 
-    monkeypatch.setattr(gemini_image, "edit", broken)
-    monkeypatch.setenv("IMAGE_PROVIDER", "gemini")
+    monkeypatch.setattr(stability, "inpaint", broken)
     monkeypatch.setenv("HERO_MODE", "inpaint")
     hero = generate.render_hero("S1", layout)
     assert hero.path == hero.guide_path and hero.score is None
     assert "quota exceeded" in hero.model
 
 
-def test_gemini_composite_keeps_the_room_outside_the_mask():
-    rng = np.random.default_rng(2)
-    room = (rng.random((300, 400, 3)) * 255).astype(np.uint8)
-    painted = np.zeros_like(room)
-    mask = np.zeros((300, 400), np.uint8)
-    mask[150:250, 100:300] = 255
-    out = gemini_image.composite(room, painted, mask)
-    assert np.array_equal(out[:60], room[:60])  # far from the furniture: the real photo
-    assert out[200, 200].max() <= 1  # inside the furniture area: the generated image
-    pm = gemini_image.placement_map(room, room, mask)
-    assert np.array_equal(pm[200, 200], room[200, 200])  # furniture area: the real photo
-    assert pm[:100].mean() < 0.3 * room[:100].mean()  # elsewhere: darkened, no new colors
+def test_prompt_names_the_furniture_this_photo_shows(single_room, bakery_brief):
+    layout = plan_layout("S1", single_room, None, bakery_brief)
+    tables = [i for i in layout.items if i.item_type in ("table_2", "table_4")]
+    assert tables
+    p = generate.build_prompt(layout, None, tables)
+    assert "café tables" in p and "display case" not in p  # a photo of the seating gets tables, not a pastry case
+    assert "display case" in generate.build_prompt(layout, None)  # no photo: the template's description
 
 
 def test_catalog_models_exist_and_match_sizes():
@@ -163,12 +154,6 @@ def test_catalog_models_exist_and_match_sizes():
         ex, ey, ez = mesh.extents
         assert ex <= item.width_m + 0.05 and ez <= item.depth_m + 0.05, item.item_type
         assert mesh.bounds[0][1] == pytest.approx(0, abs=1e-4)
-
-
-def test_nova_fit_size():
-    out = nova.fit_size(np.zeros((1500, 2000, 3), np.uint8))
-    h, w = out.shape[:2]
-    assert max(h, w) <= 1024 and h % 64 == 0 and w % 64 == 0 and min(h, w) >= 320
 
 
 def test_floor_height_ignores_unset_room_floor(single_room, bakery_brief, pano_file, monkeypatch):
