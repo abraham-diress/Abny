@@ -53,6 +53,13 @@ def front_zone(cx: float, cz: float, width: float, depth: float, rotation_deg: f
     return Polygon([local_to_world(cx, cz, lx, lz, rotation_deg) for lx, lz in corners])
 
 
+FLAT_MAX_HEIGHT_M = 0.05  # rugs and the like: you walk over them, so they never block or collide
+
+
+def is_flat(item: LayoutItem) -> bool:
+    return item.height_m <= FLAT_MAX_HEIGHT_M
+
+
 def item_footprint(item: LayoutItem) -> Polygon:
     return footprint(item.x_m, item.z_m, item.width_m, item.depth_m, item.rotation_deg)
 

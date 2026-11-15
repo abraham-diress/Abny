@@ -19,7 +19,7 @@ from __future__ import annotations
 from shapely.geometry import MultiPolygon, Point, Polygon
 from shapely.ops import unary_union
 
-from agent.layout.geometry import Frame, inward_normal, item_footprint, nearest_edge, rooms_union, unit
+from agent.layout.geometry import Frame, inward_normal, is_flat, item_footprint, nearest_edge, rooms_union, unit
 from shared.conventions import DOOR_CLEARANCE_M, MIN_AISLE_M
 from shared.schemas import Layout, LayoutItem, Room, ValidationReport, Violation
 
@@ -41,7 +41,7 @@ def validate_layout(layout: Layout, rooms: list[Room]) -> ValidationReport:
             violations.append(Violation(kind="out_of_bounds", item_ids=[it.item_id], message=f"{it.item_type} sticks out of the rooms"))
 
     # --- overlaps ------------------------------------------------------------
-    items = layout.items
+    items = [it for it in layout.items if not is_flat(it)]  # a rug can lie under a sofa
     for i in range(len(items)):
         for j in range(i + 1, len(items)):
             a, b = fps[items[i].item_id], fps[items[j].item_id]
@@ -108,7 +108,7 @@ def unreachable_items(
         return []
 
     half = aisle / 2.0
-    obstacles = unary_union(list(fps.values()))
+    obstacles = unary_union([fps[it.item_id] for it in layout.items if not is_flat(it)] or [Polygon()])
     walk = floor.buffer(-half).difference(obstacles.buffer(half))
     parts = _parts(walk)
     if not parts:
@@ -131,6 +131,8 @@ def unreachable_items(
     bad: list[LayoutItem] = []
     for it in layout.items:
         fp = fps[it.item_id]
+        if is_flat(it):
+            continue
         if it.zone in CUSTOMER_ZONES or it.seats > 0:
             ok = entrance_part is not None and entrance_part.distance(fp) <= reach
         elif it.zone == "back_of_house":
@@ -143,7 +145,7 @@ def unreachable_items(
 
 
 def _widest_route(layout: Layout, rooms: list[Room], floor: Polygon, fps: dict[str, Polygon]) -> float | None:
-    customer = [it for it in layout.items if it.zone in CUSTOMER_ZONES or it.seats > 0]
+    customer = [it for it in layout.items if (it.zone in CUSTOMER_ZONES or it.seats > 0) and not is_flat(it)]
     if not customer:
         return None
 
