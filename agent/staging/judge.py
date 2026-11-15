@@ -3,7 +3,7 @@
 Off by default; set SCORER_LLM=1 to enable. Uses LLM_PROVIDER (gemini | anthropic | bedrock):
   gemini:    model JUDGE_MODEL (default gemini-3.5-flash; flash-lite scores too generously), key GOOGLE_API_KEY
   anthropic: Anthropic, model ANTHROPIC_MODEL (default claude-opus-5-5)
-  bedrock:   AnthropicBedrockMantle, model BEDROCK_MODEL_ID (default anthropic.claude-opus-5-5)
+  bedrock:   Bedrock Converse (works with a Bedrock API key), model BEDROCK_MODEL_ID (default anthropic.claude-opus-5-5)
 Returns None if disabled, unavailable, or the model declines; callers fall back to heuristics.
 """
 
@@ -88,9 +88,44 @@ def _judge_gemini(images: list[np.ndarray]) -> JudgeResult | None:
     return resp.parsed if isinstance(resp.parsed, JudgeResult) else JudgeResult.model_validate_json(resp.text)
 
 
+def _judge_bedrock(images: list[np.ndarray]) -> JudgeResult | None:
+    """Score with a Bedrock Claude model through the Converse API (a Bedrock API key in AWS_BEARER_TOKEN_BEDROCK
+    or normal AWS credentials both work). Converse has no structured output, so the model is asked for JSON."""
+    import json
+    import re
+
+    import boto3
+
+    client = boto3.client("bedrock-runtime", region_name=os.environ.get("AWS_REGION", "us-east-1"))
+    content = []
+    for img in images:
+        ok, buf = cv2.imencode(".jpg", _small(img), [cv2.IMWRITE_JPEG_QUALITY, 88])
+        content.append({"image": {"format": "jpeg", "source": {"bytes": buf.tobytes()}}})
+    reply_format = ('Answer with only a JSON object: {"realism_1to5": number, "plan_adherence": number, '
+                    '"structure_preserved": true or false, "notes": "short sentence"}')
+    content.append({"text": f"{RUBRIC}\n\n{reply_format}"})
+    resp = client.converse(
+        modelId=os.environ.get("BEDROCK_MODEL_ID", "anthropic.claude-opus-5-5"),
+        messages=[{"role": "user", "content": content}],
+        inferenceConfig={"maxTokens": 600, "temperature": 0.0},
+    )
+    text = "".join(b.get("text", "") for b in resp["output"]["message"]["content"])
+    match = re.search(r"\{.*\}", text, re.S)
+    if not match:
+        log.warning("Judge answered without JSON: %.120s", text)
+        return None
+    return JudgeResult.model_validate(json.loads(match.group(0)))
+
+
 def judge(original: np.ndarray, guide: np.ndarray | None, generated: np.ndarray) -> JudgeResult | None:
     if not enabled():
         return None
+    if os.environ.get("LLM_PROVIDER", "gemini").lower() == "bedrock":
+        try:
+            return _judge_bedrock([original, guide if guide is not None else original, generated])
+        except Exception as exc:  # noqa: BLE001 - judging is best-effort
+            log.warning("Judge unavailable: %s", exc)
+            return None
     if os.environ.get("LLM_PROVIDER", "gemini").lower() == "gemini":
         for attempt in range(2):  # one retry: Gemini returns 503/429 under load
             try:

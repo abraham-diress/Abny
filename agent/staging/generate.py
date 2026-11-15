@@ -4,7 +4,8 @@ Steps: pick the panorama face that shows the most of the layout (furniture-free 
 render_guide (boxes + mask) -> generate N images -> score each -> keep the best -> one retry
 with new seeds if none pass.
 
-IMAGE_PROVIDER (env): gemini (default; GOOGLE_API_KEY) | bedrock_nova (AWS).
+IMAGE_PROVIDER (env): gemini (default; GOOGLE_API_KEY) | bedrock_stability (Bedrock; inpaint only) | bedrock_nova (AWS;
+  Nova Canvas has reached end of life on Bedrock).
 HERO_MODE (env):
   inpaint   (default) furniture painted into the real photo; the room outside the boxes is kept
   condition the whole scene is generated from the guide image
@@ -23,7 +24,7 @@ from datetime import datetime, timezone
 import cv2
 
 from agent.layout.templates import TEMPLATES
-from agent.staging import gemini_image, nova
+from agent.staging import gemini_image, nova, stability
 from agent.staging.files import ensure_dirs, mask_url_for, to_path, to_url
 from agent.staging.guide import render_guide, view_score
 from agent.staging.score import score_image
@@ -57,7 +58,7 @@ def render_hero(space_id: str, layout: Layout, style: str | None = None) -> Hero
         seed = 7 + round_ * 101
         try:
             images = generate_images(mode, original, guide, mask, prompt, n=VARIANTS, seed=seed)
-        except (nova.NovaError, gemini_image.GeminiImageError) as exc:
+        except (nova.NovaError, gemini_image.GeminiImageError, stability.StabilityError) as exc:
             log.warning("hero %s: image generation failed: %s", layout.layout_id, exc)
             if best is None:
                 return _preview(space_id, layout, pano, guide_url, prompt, why=str(exc))
@@ -97,11 +98,16 @@ def provider() -> str:
 
 
 def _model_name() -> str:
-    return nova._model_id() if provider() == "bedrock_nova" else gemini_image.model_id()
+    if provider() == "bedrock_nova":
+        return nova._model_id()
+    return stability.model_id() if provider() == "bedrock_stability" else gemini_image.model_id()
 
 
 def generate_images(mode: str, original, guide, mask, prompt: str, n: int = 2, seed: int = 7) -> list:
     """n images from the configured provider. inpaint keeps the real room; condition redraws it."""
+    if provider() == "bedrock_stability":
+        # Inpaint only: the model repaints the masked area of the real photo and sees no guide image.
+        return stability.inpaint(original, mask, prompt, n=n, seed=seed)
     if provider() == "bedrock_nova":
         if mode == "condition":
             return nova.conditioned(guide, prompt, n=n, seed=seed)
