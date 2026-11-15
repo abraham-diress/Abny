@@ -45,18 +45,21 @@ Rules:
 - If a stage fails for a space, drop it and continue with the next best; never stop the whole run.
 - If the brief's "Feedback so far" section exists, this is a re-plan: say what changed, and only redo the
   stages it affects ({{restart_hint}}). Earlier results are cached, so re-running a stage on an unchanged space is free.
-- Never invent numbers. Everything comes from tools.
+- Never invent numbers or space_ids. Use only the space_ids that tools returned.
+- Tools write the files ({C.AGENT_SHORTLIST}, per-candidate files). Don't write or rewrite them yourself.
 """
 
 SUBAGENTS: dict[str, dict[str, str]] = {
     "scout": {
         "description": "Searches the database for spaces matching the brief and ranks them by neighborhood, budget and size. Give it nothing but the goal.",
-        "prompt": f"You are the scout. Call `search_spaces`, then `rank_neighborhoods` with top_n={config.FUNNEL_INSPECT_TOP}. "
-                  f"Reply with the shortlisted space_ids in order and one line on the strongest and weakest options.",
+        "prompt": f"You are the scout. Call `find_shortlist` once with top_n={config.FUNNEL_INSPECT_TOP}. It writes the "
+                  f"shortlist file for you; don't write files. Reply with the shortlisted space_ids exactly as returned, "
+                  f"in order, and one line on the strongest and weakest options.",
     },
     "inspector": {
         "description": "Inspects spaces from their 3D-scan panoramas (food: storefront glass, kitchen, vent hood, restroom; office: daylight, existing build-out, restroom; ceiling). Give it the space_ids.",
-        "prompt": "You are the inspector. Call `inspect_spaces` once with all the space_ids you were given. "
+        "prompt": "You are the inspector. Call `inspect_spaces` once with all the space_ids you were given "
+                  "(or with none to inspect the whole shortlist). Don't write files. "
                   "Reply with one line per space: what it has that matters for this business, and anything unverified.",
     },
     "designer": {
@@ -93,27 +96,34 @@ def _wrap(fn):
 def make_tools(ctx: RunContext) -> dict[str, list]:
     """Tools bound to this run, grouped by which agent may call them."""
 
-    def search_spaces() -> str:
-        """Filter the database by the brief's hard constraints (city, size, rent, has a 3D scan).
-        Returns how many spaces passed. Call this first."""
-        ids = F.search_spaces(ctx, agent="scout")
-        return f"{len(ids)} spaces passed the filters (of {ctx.funnel.total} total)."
-
-    def rank_neighborhoods(top_n: int = config.FUNNEL_INSPECT_TOP) -> str:
-        """Profile each filtered space's neighborhood (tenants, homes, competitors, transit, parking) and rank
-        by neighborhood fit, budget and size. Writes the shortlist file. Returns the top_n space_ids in order."""
+    def find_shortlist(top_n: int = config.FUNNEL_INSPECT_TOP) -> str:
+        """Filter the database by the brief's hard constraints (city, size, rent, has a 3D scan), then profile each
+        match's neighborhood (tenants, homes, competitors, transit, parking) and rank by neighborhood fit, budget
+        and size. Writes the shortlist file. Returns the top_n space_ids in order."""
+        # One tool on purpose: two separate tools got called in parallel, and ranking ran before the search.
+        found = F.search_spaces(ctx, agent="scout")
         ids = F.rank_neighborhoods(ctx, top_n, agent="scout")
-        lines = []
+        lines = [f"{len(found)} spaces passed the filters (of {ctx.funnel.total} total). Top {len(ids)}:"]
         for i in ids:
             s, nb = ctx.space(i), ctx.neighborhoods.get(i)
             lines.append(f"{i} | {s.address} | ${s.asking_rent_month or 0:,.0f}/mo | {s.sqft or '?'} sqft | "
                          f"nbhd {nb.score if nb else '?'}")
         return f"Shortlist written to {C.AGENT_SHORTLIST}:\n" + "\n".join(lines)
 
-    def inspect_spaces(space_ids: list[str]) -> str:
-        """Inspect spaces from cached 3D-scan panoramas with a vision model (runs in parallel).
-        Returns per space: storefront glass, existing kitchen, restroom, vent hood, ceiling height, confidence."""
-        return _ok(F.inspect_spaces(ctx, space_ids, agent="inspector"))
+    def known(space_ids: list[str] | None, default: list[str]) -> tuple[list[str], str]:
+        """Drop space_ids the tools never returned (models sometimes invent them); empty -> default."""
+        ids = [i for i in (space_ids or default) if i in ctx.spaces]
+        bad = [i for i in (space_ids or []) if i not in ctx.spaces]
+        note = (f"\nIgnored unknown space_ids {bad}; valid ones come from the shortlist: {', '.join(ctx.shortlist)}"
+                if bad else "")
+        return ids, note
+
+    def inspect_spaces(space_ids: list[str] | None = None) -> str:
+        """Inspect spaces from cached 3D-scan panoramas with a vision model (runs in parallel). Pass the
+        shortlisted space_ids, or none for the whole shortlist. Returns per space: storefront glass, existing
+        kitchen, restroom, vent hood, daylight, build-out, ceiling height, confidence."""
+        ids, note = known(space_ids, ctx.shortlist)
+        return _ok(F.inspect_spaces(ctx, ids, agent="inspector")) + note
 
     def pick_fitout_spaces(top_n: int = config.FUNNEL_FIT_TOP) -> str:
         """Re-rank the shortlist using the inspections and return the top_n space_ids worth fitting out."""
@@ -124,16 +134,19 @@ def make_tools(ctx: RunContext) -> dict[str, list]:
     def design_layouts(space_ids: list[str], strategy: str | None = None) -> str:
         """Plan the business's layout inside each space's real rooms and validate it (aisles, entrance, overlaps,
         seat/desk count). strategy: None for default, 'fewer_tables' or 'compact' to retry. Runs in parallel."""
-        return _ok(F.design_layouts(ctx, space_ids, strategy, agent="designer"))
+        space_ids, note = known(space_ids, ctx.fit_list)
+        return _ok(F.design_layouts(ctx, space_ids, strategy, agent="designer")) + note
 
     def stage_heroes(space_ids: list[str], style: str | None = None) -> str:
         """Render and score a photoreal image of the business inside each space (needs a layout first)."""
-        return _ok(F.stage_heroes(ctx, space_ids, style, agent="stager"))
+        space_ids, note = known(space_ids, ctx.fit_list)
+        return _ok(F.stage_heroes(ctx, space_ids, style, agent="stager")) + note
 
     def compute_numbers(space_ids: list[str]) -> str:
         """Rent and fit-out cost range per space, plus revenue + break-even (food) or cost per desk (office),
         and a broker email draft."""
-        return _ok(F.compute_numbers(ctx, space_ids, agent="analyst"))
+        space_ids, note = known(space_ids, ctx.fit_list)
+        return _ok(F.compute_numbers(ctx, space_ids, agent="analyst")) + note
 
     def publish_results(space_ids: list[str], reasons: dict[str, str] | None = None) -> str:
         """Publish the final ranked results to the owner's screen. space_ids: in your preferred order
@@ -144,7 +157,7 @@ def make_tools(ctx: RunContext) -> dict[str, list]:
     w = _wrap
     return {
         "orchestrator": [w(pick_fitout_spaces), w(publish_results)],
-        "scout": [w(search_spaces), w(rank_neighborhoods)],
+        "scout": [w(find_shortlist)],
         "inspector": [w(inspect_spaces)],
         "designer": [w(design_layouts)],
         "stager": [w(stage_heroes)],
@@ -158,7 +171,7 @@ def build_agent(ctx: RunContext, restart_hint: str = "full run", model: Any = No
 
     from agent.llm import get_chat_model
 
-    model = model or get_chat_model(max_tokens=4096)
+    model = model or get_chat_model(max_tokens=8192)
     tools = make_tools(ctx)
     subagents = [{"name": name, "description": s["description"], "system_prompt": s["prompt"], "tools": tools[name]}
                  for name, s in SUBAGENTS.items()]

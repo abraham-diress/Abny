@@ -14,7 +14,8 @@ def llm_available() -> bool:
         return bool(os.getenv("ANTHROPIC_API_KEY"))
     if config.LLM_PROVIDER == "gemini":
         return bool(os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY"))
-    if os.getenv("AWS_ACCESS_KEY_ID") or os.getenv("AWS_PROFILE"):
+    # A Bedrock API key (AWS_BEARER_TOKEN_BEDROCK) is picked up by boto3 directly.
+    if os.getenv("AWS_BEARER_TOKEN_BEDROCK") or os.getenv("AWS_ACCESS_KEY_ID") or os.getenv("AWS_PROFILE"):
         return True
     try:  # an SSO/instance profile also counts
         import boto3

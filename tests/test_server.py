@@ -105,3 +105,9 @@ def test_replay_only_offices(client, monkeypatch, tmp_path):
     assert runs.get(oid).replay is not None and runs.get(bid).replay is None
     office_results = client.get(f"/api/runs/{oid}/results").json()
     assert office_results and all(r["run_id"] == oid and "office" in r["space"]["property_type"].lower() for r in office_results)
+
+
+def test_space_rooms(client):
+    r = client.get("/api/spaces/sample-hou-01/rooms")
+    assert r.status_code == 200 and r.json() and "polygon_m" in r.json()[0]
+    assert client.get("/api/spaces/nope/rooms").status_code == 404

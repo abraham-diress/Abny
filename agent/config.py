@@ -43,6 +43,8 @@ FAST_MODEL_ID = os.getenv("FAST_MODEL_ID", "")
 FUNNEL_FILTER_LIMIT = _int("FUNNEL_FILTER_LIMIT", C.FUNNEL_FILTER_LIMIT)
 FUNNEL_INSPECT_TOP = _int("FUNNEL_INSPECT_TOP", C.FUNNEL_INSPECT_TOP)
 FUNNEL_FIT_TOP = _int("FUNNEL_FIT_TOP", C.FUNNEL_FIT_TOP)
+# Fit out spaces with downloaded scan photos first: only those can be inspected, staged and toured.
+PREFER_PHOTOS = os.getenv("PREFER_PHOTOS", "1") != "0"
 
 TOOL_TIMEOUT_S = _float("TOOL_TIMEOUT_S", 90.0)  # per single contract-function call
 HERO_TIMEOUT_S = _float("HERO_TIMEOUT_S", 180.0)  # image generation is slower
