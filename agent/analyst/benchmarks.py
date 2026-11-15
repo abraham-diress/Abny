@@ -50,6 +50,7 @@ ITEM_COST: dict[str, tuple[float, float]] = {
     "reach_in_fridge": (3_000, 8_000),
     "table_4": (620, 1_900),             # table (300–900) + 4 chairs (80–250 each)
     "condiment_station": (500, 2_000),
+    "bread_shelf": (600, 2_500),          # wooden bread shelving + baskets
     "retail_shelf": (200, 1_000),
     "table_2": (410, 1_200),             # table (250–700) + 2 chairs (80–250 each)
     "table_for_2": (410, 1_200),

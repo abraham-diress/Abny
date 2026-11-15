@@ -352,11 +352,19 @@ SKETCHFAB_FIX = {
     "old_persian_carpet": {"yaw": 90.0},
     "monstera": {"yaw": 0.0},
     "pothos": {"yaw": 0.0},
+    # bread (real sizes in meters, lying flat)
+    "boule": {"yaw": 0.0},
+    "bread_loaf": {"yaw": 0.0},  # long side along x
+    "bread_roll": {"yaw": 0.0},
+    "sf_croissant": {"yaw": 0.0},
+    "baguette": {"yaw": 90.0},  # long side along x
+    "bread_platter": {"yaw": 0.0},
+    "wicker_basket": {"yaw": 0.0},
 }
 TEX_MAX = 512  # texture side in pixels: keeps each GLB small enough for the browser
 
 
-SMALL_PROPS = {"croissant", "carrot_cake", "strawberry_chocolate_cake", "hamburger_buns", "potted_plant_02", "CashRegister_01"}
+SMALL_PROPS = {"boule", "bread_loaf", "bread_roll", "sf_croissant", "baguette", "bread_platter", "wicker_basket", "croissant", "carrot_cake", "strawberry_chocolate_cake", "hamburger_buns", "potted_plant_02", "CashRegister_01"}
 
 
 def _shrink(img, side: int):
@@ -519,6 +527,74 @@ def _desk(w: float, d: float, x=0.0, z=0.0, facing=(0.0, 1.0)) -> list:
     return put("wood_desk", x=x, z=z, facing=facing, scale=fit("wood_desk", w=w, h=DESK_TOP / WOOD_DESK_TOP_SHARE, d=d, stretch=True))
 
 
+BREADS = ("boule", "bread_loaf", "bread_roll", "sf_croissant", "baguette", "bread_platter")
+BREAD_SIZE = {"boule": 0.22, "bread_loaf": 0.28, "bread_roll": 0.1, "sf_croissant": 0.14, "baguette": 0.6}  # long side, m
+JITTER = (-14.0, 9.0, -5.0, 16.0, 3.0, -10.0, 12.0, -7.0)  # fixed, so builds are reproducible
+
+
+def _bread(mid: str, x: float, y: float, z: float, k: int = 0, size: float | None = None) -> list:
+    """One loaf/pastry lying at (x, y, z), turned a little so rows don't look machine-placed."""
+    ext = size_of(mid)
+    s = (size or BREAD_SIZE[mid]) / max(ext[0], ext[2])
+    return put(mid, x=x, y=y, z=z, facing=turned((0, 1), JITTER[k % len(JITTER)]), scale=(s, s, s))
+
+
+# Where food sits in the pastry case model: (x share of width, top as share of height, z share of depth).
+CASE_DOILIES_MID = ((-0.279, 0.739, 0.277), (-0.023, 0.739, 0.277), (0.170, 0.739, 0.277), (0.372, 0.739, 0.277))
+CASE_DOILIES_TOP = ((-0.279, 0.875, 0.048), (0.033, 0.875, 0.048), (0.343, 0.875, 0.048))
+CASE_TRAYS = ((-0.297, 0.305, 0.044), (-0.101, 0.305, 0.044), (0.174, 0.312, 0.094))
+CASE_STAND = (0.370, 0.363, 0.151)
+CASE_GLASS_SHELF = (0.493, -0.067, 0.42)  # (top, z share, half the usable width share)
+
+
+def _case_pastries(w: float, h: float, d: float) -> list:
+    """Croissants, rolls and small loaves on the pastry case's doilies and trays (it ships empty)."""
+    parts, k = [], 0
+    for sx, sy, sz in CASE_DOILIES_MID:  # front shelf: croissants in pairs
+        for dx in (-0.045, 0.045):
+            parts += _bread("sf_croissant", sx * w + dx, sy * h, sz * d, k, size=0.11); k += 1
+    for (sx, sy, sz), mid in zip(CASE_DOILIES_TOP, ("bread_roll", "boule", "bread_roll")):
+        parts += _bread(mid, sx * w, sy * h, sz * d, k, size=0.12 if mid == "boule" else 0.09); k += 1
+    for (sx, sy, sz), mid in zip(CASE_TRAYS, ("boule", "bread_roll", "bread_loaf")):  # bottom trays: two rows
+        for dz in (-0.1, 0.1):
+            for dx in ((-0.06, 0.06) if mid == "bread_roll" else (0.0,)):
+                parts += _bread(mid, sx * w + dx, sy * h, sz * d + dz, k, size={"boule": 0.17, "bread_loaf": 0.22}.get(mid, 0.09)); k += 1
+    top, sz, half = CASE_GLASS_SHELF  # the glass shelf in the middle: a row of rolls and croissants
+    for j, x in enumerate(np.linspace(-half * w, half * w, 11)):
+        parts += _bread("bread_roll" if j % 2 else "sf_croissant", x, top * h, sz * d, k + j, size=0.1)
+    sx, sy, sz = CASE_STAND
+    return parts + put("bread_platter", x=sx * w, y=sy * h, z=sz * d, scale=fit("bread_platter", w=0.24, d=0.24))
+
+
+SHELF_LEVELS = (0.41, 0.79, 1.17, 1.556)  # wooden_display_shelves_01: the three open shelves and the top, m
+SHELF_CUBBIES = (-0.35, 0.0, 0.35)  # centers of its three columns along its width, m
+
+
+def _bread_shelf(w: float, h: float, d: float) -> list:
+    """A bakery's bread wall: the wooden shelves with boules, loaves and rolls, baguettes in baskets on top."""
+    sy, sw = h / 1.66, w / 1.1  # shelves are scaled so the baskets on top stay within the item height
+    parts = put("wooden_display_shelves_01", facing=(1, 0), scale=(d / 0.4, sy, sw))
+    y1, y2, y3, top = (v * sy for v in SHELF_LEVELS)
+    k = 0
+    for c in (v * sw for v in SHELF_CUBBIES):
+        for dx in (-0.085, 0.085):  # bottom: round boules, two deep
+            for dz in (-0.08, 0.08):
+                parts += _bread("boule", c + dx, y1, dz, k, size=0.15); k += 1
+        for dx in (-0.11, 0.0, 0.11):  # middle: long loaves, front to back
+            parts += put("bread_loaf", x=c + dx, y=y2, facing=turned((1, 0), JITTER[k % 8] * 0.3),
+                         scale=(0.24 / size_of("bread_loaf")[0],) * 3); k += 1
+        for dx in (-0.11, 0.0, 0.11):  # eye level: rolls and croissants, two deep
+            for dz in (-0.07, 0.07):
+                parts += _bread("sf_croissant" if (k % 4 == 0) else "bread_roll", c + dx, y3, dz, k); k += 1
+    basket = fit("wicker_basket", w=0.46, h=0.08, d=0.3, stretch=True)
+    for b, x in enumerate((-0.27 * sw, 0.27 * sw)):  # top: two flat baskets of baguettes
+        parts += put("wicker_basket", x=x, y=top, scale=basket)
+        for j, dz in enumerate((-0.07, 0.0, 0.07)):
+            parts += put("baguette", x=x + 0.015 * (j - 1), y=top + 0.03 + 0.02 * j, z=dz, facing=turned((0, 1), JITTER[b * 3 + j] * 0.3),
+                         scale=(0.5 / size_of("baguette")[0],) * 3)
+    return parts
+
+
 def build_sketchfab(item: dict) -> list | None:
     """The item from Sketchfab models (CC-BY, assets/CREDITS.md), or None when the sources are missing.
     Chairs are mixed on purpose: each kind of table or desk gets its own chair style."""
@@ -539,7 +615,10 @@ def build_sketchfab(item: dict) -> list | None:
         chair = fit("tolix_chair", h=0.86)
         return parts + [p for k, sx in enumerate((-w / 4, w / 4)) for p in put("tolix_chair", x=sx, z=d / 2 - 0.27, facing=turned((0, -1), SWIVEL[k + 4]), scale=chair)]
     if t == "display_case" and have("pastry_case"):
-        return put("pastry_case", scale=fit("pastry_case", w=w, h=h, d=d, stretch=True))
+        parts = put("pastry_case", scale=fit("pastry_case", w=w, h=h, d=d, stretch=True))
+        return parts + (_case_pastries(w, h, d) if have(*BREADS) else [])
+    if t == "bread_shelf" and have("wooden_display_shelves_01", "wicker_basket", *BREADS):
+        return _bread_shelf(w, h, d)
     if t in ("service_counter", "espresso_bar") and have("bar_counter"):
         parts = put("bar_counter", scale=fit("bar_counter", w=w, h=1.0, d=d, stretch=True))
         if t == "service_counter" and have("CashRegister_01"):
@@ -550,7 +629,12 @@ def build_sketchfab(item: dict) -> list | None:
     if t in ("reach_in_fridge", "proofing_cabinet") and have("commercial_fridge"):
         return put("commercial_fridge", scale=fit("commercial_fridge", w=w, h=h, d=d, stretch=True))
     if t == "prep_table" and have("steel_table"):
-        return put("steel_table", scale=fit("steel_table", w=w, h=h, d=d, stretch=True))
+        parts = put("steel_table", scale=fit("steel_table", w=w, h=h, d=d, stretch=True))
+        if have(*BREADS):  # the day's loaves cooling on the table
+            for k, x in enumerate(np.linspace(-w / 2 + 0.2, w / 2 - 0.2, 6)):
+                parts += _bread("boule" if k % 2 else "bread_loaf", x, h, -0.12, k)
+                parts += _bread("bread_loaf" if k % 2 else "boule", x + 0.05, h, 0.14, k + 3)
+        return parts
     if t == "three_comp_sink" and have("commercial_sink"):
         return put("commercial_sink", scale=fit("commercial_sink", w=w, h=h, d=d, stretch=True))
     if t == "spiral_mixer" and have("steel_table", "dough_mixer"):

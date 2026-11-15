@@ -34,6 +34,13 @@ The GLBs in `assets/glb/` are built by `assets/build_assets.py` from the models 
 | Floor lamp | "Floor Lamp" | bilgehan.korkmaz | https://sketchfab.com/3d-models/33eb258d9873435690254cfbb0ea46ec |
 | Lounge and meeting rugs | "Persian Rug" | nrecord | https://sketchfab.com/3d-models/fe13eecfc9b8405dab1fe76c5dd28a4c |
 | Huddle rug | "Old Persian Carpet_14_MB" | ahmagh2e | https://sketchfab.com/3d-models/08fee343183d4287a9ac8269ec4e97c5 |
+| Round loaves (pastry case, bread shelf, prep table) | "Homemade Bread (Game Ready / 2K PBR)" | meerschaumdigital | https://sketchfab.com/3d-models/809fab32f5c94cc5916fbd00b7d9f659 |
+| Long loaves | "(Game Ready Free) Bread Loaf" | Igrodev | https://sketchfab.com/3d-models/daf4801f72ae4f9eba9c338afbbb2926 |
+| Bread rolls | "Bread Roll (Game Ready / 2K PBR)" | meerschaumdigital | https://sketchfab.com/3d-models/2a75ccc1c53348efb7e82eeb86f82173 |
+| Croissants | "Croissant (Game Ready / 2K PBR)" | meerschaumdigital | https://sketchfab.com/3d-models/c512d041ead447f091eeb31982558d80 |
+| Baguettes | "French baguette" | encoded01 | https://sketchfab.com/3d-models/b6c483995db04698bf5041c9cef369c0 |
+| Pastry platter in the display case | "Bakery Products collection" | vertexgrocer | https://sketchfab.com/3d-models/5cc69d0b0ae244b1a7c5b26dfc2ca721 |
+| Bread baskets | "Wicker basket 01" | koss2712 | https://sketchfab.com/3d-models/d0153e62dfbb4659b0cb55d5bf51a9d1 |
 
 Licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Changes: rescaled to the
 catalog sizes in meters, rotated to face +z, textures downsized, parts removed (the chair from "Desk
@@ -43,7 +50,7 @@ Set" is used separately), and combined with other models into furniture groups.
 
 4-person café table and huddle table, bench and bench table, cash register, drawer cabinet
 (office storage), wooden display shelves (retail shelf), modern wooden cabinet (office
-kitchenette), lounge sofa, armchairs and coffee table, bookshelf:
+kitchenette, bakery bread shelf), lounge sofa, armchairs and coffee table, bookshelf:
 https://polyhaven.com/models (see `assets/fetch_cc0.py` for the ids).
 
 Still simple shapes (no realistic free model found): deck oven, convection oven, condiment

@@ -55,6 +55,14 @@ MODELS = {
     "persian_rug": ("fe13eecfc9b8405dab1fe76c5dd28a4c", "Persian Rug", "nrecord"),
     "old_persian_carpet": ("08fee343183d4287a9ac8269ec4e97c5", "Old Persian Carpet_14_MB", "ahmagh2e"),
     "pothos": ("e9832f38484f4f85b3f9081b51fa3799", "Pothos Potted Plant - Money Plant", "AllQuad"),
+    # bread (pastry case, bread shelf, prep table)
+    "boule": ("809fab32f5c94cc5916fbd00b7d9f659", "Homemade Bread (Game Ready / 2K PBR)", "meerschaumdigital"),
+    "bread_loaf": ("daf4801f72ae4f9eba9c338afbbb2926", "(Game Ready Free) Bread Loaf", "Igrodev"),
+    "bread_roll": ("2a75ccc1c53348efb7e82eeb86f82173", "Bread Roll (Game Ready / 2K PBR)", "meerschaumdigital"),
+    "sf_croissant": ("c512d041ead447f091eeb31982558d80", "Croissant (Game Ready / 2K PBR)", "meerschaumdigital"),
+    "baguette": ("b6c483995db04698bf5041c9cef369c0", "French baguette", "encoded01"),
+    "bread_platter": ("5cc69d0b0ae244b1a7c5b26dfc2ca721", "Bakery Products collection", "vertexgrocer"),
+    "wicker_basket": ("d0153e62dfbb4659b0cb55d5bf51a9d1", "Wicker basket 01", "koss2712"),
 }
 
 
