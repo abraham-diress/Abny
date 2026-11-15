@@ -33,6 +33,9 @@ MODELS = [
     "strawberry_chocolate_cake",
     "hamburger_buns",
     "potted_plant_02",
+    "modern_arm_chair_01",  # lounge armchairs
+    "modern_coffee_table_01",  # lounge coffee table
+    "wooden_bookshelf_worn",  # bookshelf
 ]
 
 
